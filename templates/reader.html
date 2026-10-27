@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>{{ manga_name }} · {{ filename }}</title>
+  
+  <!-- Tailwind CSS & DaisyUI via CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"Fira Code"', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .page-wrapper {
+      position: relative;
+      user-select: none;
+      -webkit-user-select: none;
+      display: flex;
+      justify-content: center;
+      margin: 0 auto;
+    }
+    .page-image {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.7);
+    }
+    .selection-box {
+      position: absolute;
+      border: 2px dashed #f97316;
+      background: rgba(249, 115, 22, 0.25);
+      pointer-events: none;
+      z-index: 30;
+      display: none;
+      border-radius: 6px;
+    }
+
+    /* INVISIBLE / SUBTLE TOUCHABLE BUBBLE ZONES */
+    .bubble-zone {
+      position: absolute;
+      background: rgba(249, 115, 22, 0.06);
+      border: 1px dashed rgba(249, 115, 22, 0.35);
+      border-radius: 8px;
+      cursor: pointer;
+      z-index: 25;
+      transition: all 0.2s ease-in-out;
+    }
+    .bubble-zone:hover, .bubble-zone:active {
+      background: rgba(249, 115, 22, 0.2);
+      border: 1.5px solid #f97316;
+      box-shadow: 0 0 12px rgba(249, 115, 22, 0.6);
+    }
+
+    /* 100% CLEAN IN-BUBBLE TEXT REPLACEMENT (НЕТ ЛИШНИХ КНОПОК И ИКОНОК ВНУТРИ БАБЛА!) */
+    .in-bubble-replacement {
+      position: absolute;
+      z-index: 28;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.98);
+      color: #0f172a;
+      border-radius: 8px;
+      padding: 1px 2px; /* Ультра-минимальные отступы, почти впритык */
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      cursor: pointer;
+      box-sizing: border-box;
+      overflow: hidden;
+      animation: popIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+      user-select: none;
+    }
+    .in-bubble-replacement:active {
+      transform: scale(0.98);
+    }
+
+    .in-bubble-text {
+      width: 100%;
+      max-height: 100%;
+      display: block;
+      text-align: center;
+      word-break: normal;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+      hyphens: auto;
+      -webkit-hyphens: auto;
+      font-weight: 800;
+      line-height: 1.10;
+      overflow: hidden;
+      padding: 0;
+      margin: 0;
+    }
+
+    @keyframes popIn {
+      from { transform: scale(0.92); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    /* ULTRA COMPACT FLOATING EDGE PILL (Прячется за угол края) */
+    #edgeSliderPill {
+      position: fixed;
+      right: -24px;
+      top: 55%;
+      transform: translateY(-50%);
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: rgba(30, 41, 59, 0.65);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1.5px solid rgba(249, 115, 22, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      padding-left: 7px;
+      z-index: 60;
+      cursor: pointer;
+      box-shadow: -3px 3px 15px rgba(0, 0, 0, 0.4);
+      transition: right 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s;
+      opacity: 0.25;
+    }
+    #edgeSliderPill:hover, #edgeSliderPill:active, #edgeSliderPill.revealed {
+      right: -8px;
+      opacity: 1 !important;
+      background: rgba(15, 23, 42, 0.95);
+      border-color: #f97316;
+    }
+
+    /* COMPACT BOTTOM DRAWER (ОТКРЫВАЕТСЯ ТОЛЬКО ПРИ ДОЛГОМ НАЖАТИИ ИЛИ ИЗ МЕНЮ) */
+    #compactDetailsModal {
+      position: fixed;
+      bottom: 0;
+      inset-x: 0;
+      z-index: 70;
+      background: rgba(15, 23, 42, 0.96);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-top: 1px solid rgba(249, 115, 22, 0.4);
+      box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.85);
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      transform: translateY(105%);
+      max-height: 52vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #compactDetailsModal.open {
+      transform: translateY(0);
+    }
+
+    .select-mode-active {
+      cursor: crosshair !important;
+      touch-action: none !important;
+    }
+  </style>
+</head>
+<body class="bg-black text-base-content min-h-screen flex flex-col font-sans select-none overflow-x-hidden">
+
+  <!-- Top Floating Header Bar -->
+  <header id="topBar" class="fixed top-0 inset-x-0 bg-base-100/90 backdrop-blur-md border-b border-base-200 z-40 transition-transform duration-300 px-3 sm:px-6 py-2 flex items-center justify-between shadow-lg">
+    <div class="flex items-center gap-2">
+      <a href="/" class="btn btn-ghost btn-circle btn-sm text-base" title="В библиотеку">
+        <i class="fa-solid fa-arrow-left"></i>
+      </a>
+
+      <!-- Chapter Dropdown -->
+      <div class="dropdown">
+        <div tabindex="0" role="button" class="btn btn-ghost btn-sm font-bold gap-2 normal-case truncate max-w-[140px] sm:max-w-xs">
+          <i class="fa-solid fa-bookmark text-primary text-xs"></i>
+          <span class="truncate">{{ filename }}</span>
+          <i class="fa-solid fa-chevron-down text-[10px] opacity-60"></i>
+        </div>
+        <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-base-200 rounded-box w-72 max-h-96 overflow-y-auto border border-base-300 mt-2">
+          <li class="menu-title font-bold text-xs uppercase opacity-60">Главы</li>
+          {% for ch in all_chapters %}
+            <li>
+              <a href="/reader/{{ manga_name }}/{{ ch.filename }}" class="flex justify-between py-2 {% if ch.filename == filename %}active font-bold{% endif %}">
+                <span class="truncate">{{ ch.filename }}</span>
+                <span class="text-xs opacity-50">{{ ch.size_mb }}MB</span>
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <!-- Right Controls -->
+    <div class="flex items-center gap-1.5">
+      <!-- Ambient Background Preload Indicator -->
+      <div id="ambientProgress" class="hidden items-center gap-1.5 bg-base-200/90 border border-secondary/30 px-2.5 py-1 rounded-full shadow-sm text-[11px] font-bold text-secondary">
+        <span class="loading loading-spinner loading-xs text-secondary"></span>
+        <span id="ambientProgressText">Фон: 0%</span>
+      </div>
+
+      <div class="badge badge-primary badge-outline text-[11px] font-bold gap-1 py-2.5 hidden sm:inline-flex">
+        <i class="fa-solid fa-microphone-lines"></i>
+        <span>Мужской ИИ-голос</span>
+      </div>
+
+      <!-- Pre-translate Chapter Button -->
+      <button onclick="batchTranslateChapterModal()" class="btn btn-sm btn-ghost gap-1 font-bold text-secondary" title="Перевести всю главу">
+        <i class="fa-solid fa-cloud-bolt text-xs"></i>
+        <span class="hidden sm:inline text-xs">Перевести всё</span>
+      </button>
+
+      <!-- Reading Mode Switcher -->
+      <button onclick="toggleReadingMode()" id="modeBtn" class="btn btn-ghost btn-circle btn-sm" title="Режим: Одиночный / Свиток">
+        <i class="fa-solid fa-scroll text-primary text-sm"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- ULTRA COMPACT ROUND EDGE SLIDER (Спрятан за правый край экрана) -->
+  <div id="edgeSliderPill" onclick="onEdgePillClick(event)" title="Меню перевода">
+    <div class="flex items-center justify-center text-primary">
+      <i class="fa-solid fa-bolt-lightning text-xs animate-pulse"></i>
+    </div>
+  </div>
+
+  <!-- Quick Floating Action Menu -->
+  <div id="edgeMenu" class="fixed right-3 top-1/2 -translate-y-1/2 bg-base-100/95 backdrop-blur-xl border border-primary/40 p-3 rounded-2xl shadow-2xl z-50 flex flex-col gap-2 hidden w-56 animate-in fade-in zoom-in-95 duration-150">
+    <div class="flex justify-between items-center border-b border-base-200/80 pb-1.5 mb-1">
+      <span class="font-extrabold text-[11px] text-primary uppercase flex items-center gap-1">
+        <i class="fa-solid fa-bolt"></i> Чтение и перевод
+      </span>
+      <button onclick="closeEdgeMenu()" class="btn btn-ghost btn-circle btn-xs text-xs">✕</button>
+    </div>
+    
+    <button onclick="detectAndShowBubbles(); closeEdgeMenu();" class="btn btn-primary btn-sm gap-2 font-bold justify-start text-xs">
+      <i class="fa-solid fa-wand-magic-sparkles text-xs"></i>
+      <span>Найти баблы на странице</span>
+    </button>
+    
+    <button onclick="toggleSelectMode(); closeEdgeMenu();" class="btn btn-outline btn-sm gap-2 font-bold justify-start text-xs">
+      <i class="fa-solid fa-crop-simple text-xs"></i>
+      <span>Выделить область пальцем</span>
+    </button>
+    
+    <button onclick="replaceAllBubblesWithRussian(); closeEdgeMenu();" class="btn btn-ghost btn-sm gap-2 font-semibold justify-start text-xs">
+      <i class="fa-solid fa-language text-xs"></i>
+      <span>Заменить все баблы на русский</span>
+    </button>
+  </div>
+
+  <!-- Reader Main Area -->
+  <main id="readerArea" class="flex-1 flex flex-col items-center justify-center pt-12 pb-16 px-0 sm:px-4 w-full">
+    <div id="singleModeContainer" class="w-full flex flex-col items-center justify-center relative">
+      <div id="pageWrapper" class="page-wrapper max-w-4xl relative">
+        <img id="currentImage" src="" alt="Страница" class="page-image" />
+        <div id="selectionBox" class="selection-box"></div>
+        <div id="bubblesLayer" class="absolute inset-0 pointer-events-auto"></div>
+        <div id="replacementsLayer" class="absolute inset-0 pointer-events-auto"></div>
+      </div>
+
+      <!-- Navigation tap zones -->
+      <div id="leftTapZone" onclick="prevPage()" class="absolute left-0 top-0 bottom-0 w-1/4 z-20 cursor-w-resize" title="Назад"></div>
+      <div id="centerTapZone" onclick="toggleBars()" class="absolute left-1/4 right-1/4 top-0 bottom-0 z-20" title="Меню"></div>
+      <div id="rightTapZone" onclick="nextPage()" class="absolute right-0 top-0 bottom-0 w-1/4 z-20 cursor-e-resize" title="Вперёд"></div>
+    </div>
+
+    <!-- WEBTOON (VERTICAL STRIP) CONTAINER -->
+    <div id="webtoonContainer" class="w-full max-w-3xl hidden flex flex-col items-center gap-4"></div>
+  </main>
+
+  <!-- Bottom Floating Navigation Bar -->
+  <footer id="bottomBar" class="fixed bottom-0 inset-x-0 bg-base-100/90 backdrop-blur-md border-t border-base-200 z-30 transition-transform duration-300 px-4 sm:px-8 py-2 flex items-center justify-between gap-3 shadow-2xl">
+    <button onclick="prevPage()" class="btn btn-circle btn-ghost btn-xs">
+      <i class="fa-solid fa-chevron-left"></i>
+    </button>
+
+    <div class="flex-1 flex items-center gap-3 max-w-xl mx-auto">
+      <input type="range" id="pageSlider" min="0" max="0" value="0" class="range range-primary range-xs flex-1" oninput="onSliderChange(this.value)" />
+      <span id="pageCounter" class="badge badge-neutral font-bold text-[11px] whitespace-nowrap">
+        1 / 1
+      </span>
+    </div>
+
+    <button onclick="nextPage()" class="btn btn-circle btn-ghost btn-xs">
+      <i class="fa-solid fa-chevron-right"></i>
+    </button>
+  </footer>
+
+  <!-- COMPACT BOTTOM DRAWER (ОТКРЫВАЕТСЯ ТОЛЬКО ПРИ ДОЛГОМ НАЖАТИИ) -->
+  <div id="compactDetailsModal">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-base-200/60 bg-base-200/40">
+      <div class="flex items-center gap-2">
+        <span class="badge badge-primary badge-sm font-bold text-[10px]">Groq AI</span>
+        <span id="dockIpa" class="font-mono text-xs text-secondary font-semibold"></span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button onclick="playActiveAudio()" class="btn btn-primary btn-xs gap-1 font-bold shadow-sm">
+          <i class="fa-solid fa-volume-high text-xs"></i>
+          <span>Слушать</span>
+        </button>
+        <button onclick="closeDetailsModal()" class="btn btn-ghost btn-circle btn-xs text-xs">✕</button>
+      </div>
+    </div>
+
+    <div class="p-3.5 space-y-2.5 overflow-y-auto">
+      <div class="bg-base-200/60 p-2.5 rounded-xl border border-base-200">
+        <div class="text-[10px] font-bold text-primary uppercase tracking-wider mb-0.5">Оригинал (Французский)</div>
+        <div id="dockOrig" class="text-sm font-bold text-base-content leading-snug"></div>
+        <div id="dockLiteral" class="text-xs text-base-content/70 italic mt-1 pt-1 border-t border-base-300"></div>
+      </div>
+
+      <div class="bg-primary/10 p-2.5 rounded-xl border border-primary/20">
+        <div class="text-[10px] font-bold text-primary uppercase tracking-wider mb-0.5">Литературный перевод</div>
+        <div id="dockNatural" class="text-sm font-extrabold text-base-content leading-snug"></div>
+      </div>
+
+      <div id="dockVocabSection">
+        <div class="text-[10px] font-bold text-secondary uppercase tracking-wider mb-1.5 flex items-center gap-1">
+          <i class="fa-solid fa-graduation-cap"></i> Словарь реплики
+        </div>
+        <div id="dockVocabList" class="flex flex-wrap gap-1.5"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pre-translate Chapter Modal -->
+  <dialog id="batchModal" class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box bg-base-100 border border-base-200 rounded-3xl p-5 max-w-sm">
+      <h3 class="font-extrabold text-base flex items-center gap-2 mb-2">
+        <i class="fa-solid fa-cloud-bolt text-secondary"></i>
+        <span>Пакетный перевод всей главы</span>
+      </h3>
+      <p class="text-xs text-base-content/70 mb-4 leading-relaxed">
+        Сервер в фоне переведёт все реплики через YOLO26n и Groq Vision и сохранит их в локальную базу данных для чтения без интернета.
+      </p>
+
+      <div id="batchProgressBox" class="hidden mb-4 bg-base-200 p-3 rounded-2xl">
+        <div class="flex justify-between text-xs font-bold mb-1">
+          <span id="batchStatusText">Обработка...</span>
+          <span id="batchPct">0%</span>
+        </div>
+        <progress id="batchBar" class="progress progress-secondary w-full" value="0" max="100"></progress>
+      </div>
+
+      <div class="modal-action">
+        <form method="dialog">
+          <button class="btn btn-ghost btn-xs">Отмена</button>
+        </form>
+        <button onclick="startBatchTranslation()" id="batchStartBtn" class="btn btn-secondary btn-xs font-bold gap-1.5">
+          <i class="fa-solid fa-play text-xs"></i> Запустить
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <audio id="ttsAudio" class="hidden"></audio>
+
+  <script>
+    const MANGA_NAME = "{{ manga_name }}";
+    const FILENAME = "{{ filename }}";
+    const PAGES_LIST = {{ pages_list | tojson }};
+    
+    let currentPageIdx = 0;
+    let readingMode = 'single';
+    let isSelectMode = false;
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let barsVisible = true;
+    let activeAudioText = '';
+    let activeAudioEmotion = 'neutral';
+    let ambientBatchStarted = false;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.documentElement.setAttribute('data-theme', localStorage.getItem('mk-theme') || 'dark');
+      initReader();
+      // Auto-trigger seamless background pre-caching after reader opens
+      setTimeout(startAmbientBackgroundPreload, 2500);
+    });
+
+    async function startAmbientBackgroundPreload() {
+      if (ambientBatchStarted) return;
+      ambientBatchStarted = true;
+
+      const progressEl = document.getElementById('ambientProgress');
+      const progressTxt = document.getElementById('ambientProgressText');
+
+      try {
+        const resp = await fetch('/api/batch-translate-chapter', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            manga_name: MANGA_NAME,
+            filename: FILENAME,
+            start_page: 0
+          })
+        });
+        const { task_id } = await resp.json();
+        if (!task_id) return;
+
+        progressEl.classList.remove('hidden');
+        progressEl.classList.add('flex');
+
+        const pollTimer = setInterval(async () => {
+          try {
+            const tResp = await fetch('/api/task/' + task_id);
+            const task = await tResp.json();
+            const pct = task.total_pages > 0 ? Math.round((task.completed_pages / task.total_pages) * 100) : 0;
+            progressTxt.innerText = `Фон: ${pct}%`;
+
+            if (task.status === 'completed' || task.status === 'failed') {
+              clearInterval(pollTimer);
+              if (task.status === 'completed') {
+                progressTxt.innerText = 'Кэш 100%';
+                setTimeout(() => progressEl.classList.add('hidden'), 3500);
+                loadCachedReplacements(currentPageIdx);
+              } else {
+                progressEl.classList.add('hidden');
+              }
+            }
+          } catch (e) {
+            clearInterval(pollTimer);
+            progressEl.classList.add('hidden');
+          }
+        }, 2000);
+
+      } catch (err) {
+        console.log('Ambient preload notice:', err);
+      }
+    }
+
+    function initReader() {
+      const slider = document.getElementById('pageSlider');
+      slider.max = Math.max(0, PAGES_LIST.length - 1);
+      loadPage(0);
+      setupSelectionHandlers();
+
+      window.addEventListener('resize', () => {
+        document.querySelectorAll('.in-bubble-replacement').forEach(fitBubbleText);
+      });
+    }
+
+    function loadPage(idx) {
+      if (idx < 0 || idx >= PAGES_LIST.length) return;
+      currentPageIdx = idx;
+      
+      const img = document.getElementById('currentImage');
+      img.src = `/page-image/${MANGA_NAME}/${FILENAME}/${idx}`;
+      
+      document.getElementById('pageSlider').value = idx;
+      document.getElementById('pageCounter').innerText = `${idx + 1} / ${PAGES_LIST.length}`;
+      
+      clearBubbles();
+      img.onload = () => {
+        loadCachedReplacements(idx);
+      };
+      // In case image was already cached/loaded
+      if (img.complete && img.naturalWidth > 0) {
+        loadCachedReplacements(idx);
+      }
+      closeDetailsModal();
+      
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
+
+    function nextPage() {
+      if (currentPageIdx < PAGES_LIST.length - 1) loadPage(currentPageIdx + 1);
+    }
+
+    function prevPage() {
+      if (currentPageIdx > 0) loadPage(currentPageIdx - 1);
+    }
+
+    function onSliderChange(val) {
+      loadPage(parseInt(val, 10));
+    }
+
+    function toggleBars() {
+      if (isSelectMode) return;
+      barsVisible = !barsVisible;
+      document.getElementById('topBar').style.transform = barsVisible ? 'translateY(0)' : 'translateY(-100%)';
+      document.getElementById('bottomBar').style.transform = barsVisible ? 'translateY(0)' : 'translateY(100%)';
+    }
+
+    function toggleReadingMode() {
+      const single = document.getElementById('singleModeContainer');
+      const webtoon = document.getElementById('webtoonContainer');
+      const modeBtn = document.getElementById('modeBtn');
+
+      if (readingMode === 'single') {
+        readingMode = 'webtoon';
+        single.classList.add('hidden');
+        webtoon.classList.remove('hidden');
+        modeBtn.innerHTML = '<i class="fa-solid fa-file text-primary text-sm"></i>';
+        renderWebtoon();
+      } else {
+        readingMode = 'single';
+        webtoon.classList.add('hidden');
+        single.classList.remove('hidden');
+        modeBtn.innerHTML = '<i class="fa-solid fa-scroll text-primary text-sm"></i>';
+        loadPage(currentPageIdx);
+      }
+    }
+
+    function renderWebtoon() {
+      const container = document.getElementById('webtoonContainer');
+      container.innerHTML = '';
+      PAGES_LIST.forEach((pageName, idx) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'page-wrapper w-full';
+        const img = document.createElement('img');
+        img.src = `/page-image/${MANGA_NAME}/${FILENAME}/${idx}`;
+        img.loading = 'lazy';
+        img.className = 'page-image rounded-xl';
+        wrap.appendChild(img);
+        container.appendChild(wrap);
+      });
+    }
+
+    // ==================== EDGE PILL & MENU ====================
+
+    function onEdgePillClick(e) {
+      e.stopPropagation();
+      const menu = document.getElementById('edgeMenu');
+      const pill = document.getElementById('edgeSliderPill');
+      menu.classList.toggle('hidden');
+      pill.classList.toggle('revealed');
+    }
+
+    function closeEdgeMenu() {
+      document.getElementById('edgeMenu').classList.add('hidden');
+      document.getElementById('edgeSliderPill').classList.remove('revealed');
+    }
+
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('edgeMenu');
+      const pill = document.getElementById('edgeSliderPill');
+      if (!menu.contains(e.target) && !pill.contains(e.target)) {
+        closeEdgeMenu();
+      }
+    });
+
+    // ==================== DYNAMIC FONT AUTOFIT & PRECISE BOUND EXPANSION ====================
+
+    function fitBubbleText(container) {
+      const textSpan = container.querySelector('.in-bubble-text');
+      if (!textSpan) return;
+
+      const pageImg = document.getElementById('currentImage');
+      const imgW = pageImg ? pageImg.clientWidth : (container.offsetParent ? container.offsetParent.clientWidth : window.innerWidth);
+      const imgH = pageImg ? pageImg.clientHeight : (container.offsetParent ? container.offsetParent.clientHeight : window.innerHeight);
+
+      // Исходные габариты найденного бабла в процентах
+      const baseW = parseFloat(container.dataset.origW || container.style.width);
+      const baseH = parseFloat(container.dataset.origH || container.style.height);
+      const baseX = parseFloat(container.dataset.origX || container.style.left);
+      const baseY = parseFloat(container.dataset.origY || container.style.top);
+
+      // Исходные пиксельные габариты обнаруженного бабла
+      const origWPx = Math.max(10, (baseW / 100) * imgW);
+      const origHPx = Math.max(10, (baseH / 100) * imgH);
+
+      // 1. Расчёт целевого размера шрифта исходя из РАЗМЕРА ИСХОДНОГО БАБЛА и ДЛИНЫ РЕПЛИКИ:
+      // В манге высота строки обычно составляет от 1/2 до 1/4 высоты бабла
+      const origText = (container.dataset.origText || '').trim();
+      const numLinesEst = Math.max(1, Math.min(6, Math.ceil(Math.sqrt((origText.length || 15) / 4))));
+      
+      // Идеальный пропорциональный шрифт по высоте бабла:
+      let fontFromHeight = Math.floor((origHPx * 0.75) / numLinesEst);
+      // Ограничение по ширине (чтобы среднее слово помещалось):
+      let fontFromWidth = Math.floor(origWPx / 5.5);
+
+      let naturalFont = Math.min(fontFromHeight, fontFromWidth);
+      
+      // Ограничиваем естественный размер шрифта бабла:
+      // Никогда не делать шрифт гигантским (максимум 14-15px для средних баблов, 17px для огромных криков)
+      const MAX_NATURAL_PX = Math.min(18, Math.max(11, Math.floor(origHPx * 0.45)));
+      const MIN_READABLE_PX = 9; // Не мельчить ниже 9px, чтобы буквы оставались чёткими
+
+      let targetFont = Math.max(MIN_READABLE_PX, Math.min(MAX_NATURAL_PX, naturalFont || 12));
+
+      // Reset to original detected position and size first
+      container.style.width = baseW + '%';
+      container.style.height = baseH + '%';
+      container.style.left = baseX + '%';
+      container.style.top = baseY + '%';
+
+      // Test helper: directly reads actual DOM rendered sizes
+      function doesTextFit(sizePx) {
+        textSpan.style.fontSize = sizePx + 'px';
+        textSpan.style.lineHeight = Math.max(1.08, sizePx * 1.10) + 'px';
+        
+        // Padded boundary check (1px margin in container)
+        const availW = container.clientWidth - 2;
+        const availH = container.clientHeight - 2;
+
+        return (textSpan.scrollWidth <= availW) && (textSpan.scrollHeight <= availH);
+      }
+
+      // Step 1: Проверяем, умещается ли текст в родных размерах бабла с targetFont
+      if (doesTextFit(targetFont)) {
+        // Если умещается с запасом — отлично, пробуем чуть крупнее, но не больше MAX_NATURAL_PX
+        let optimal = targetFont;
+        for (let s = targetFont + 1; s <= MAX_NATURAL_PX; s++) {
+          if (doesTextFit(s)) {
+            optimal = s;
+          } else {
+            break;
+          }
+        }
+        textSpan.style.fontSize = optimal + 'px';
+        textSpan.style.lineHeight = Math.max(1.08, optimal * 1.10) + 'px';
+        return;
+      }
+
+      // Step 2: Если не умещается с targetFont, сначала пробуем слегка уменьшить шрифт (до MIN_READABLE_PX)
+      // чтобы не раздувать бабл зря, если не хватает всего 1-2 пикселей
+      let fitInOrig = false;
+      for (let s = targetFont - 1; s >= MIN_READABLE_PX; s--) {
+        if (doesTextFit(s)) {
+          textSpan.style.fontSize = s + 'px';
+          textSpan.style.lineHeight = Math.max(1.08, s * 1.10) + 'px';
+          fitInOrig = true;
+          break;
+        }
+      }
+      if (fitInOrig) return;
+
+      // Step 3: Если даже при MIN_READABLE_PX текст не виден целиком,
+      // плавно расширяем контейнер бабла от исходного центра, пока текст не станет на 100% виден!
+      const aspect = baseH / Math.max(0.5, baseW);
+      const chosenFont = Math.max(MIN_READABLE_PX, targetFont - 1);
+
+      for (let scale = 1.05; scale <= 2.50; scale += 0.05) {
+        let wScale = aspect > 1.2 ? scale * 1.25 : scale;
+        let hScale = aspect < 0.7 ? scale * 1.20 : scale;
+
+        const curW = Math.min(96, baseW * wScale);
+        const curH = Math.min(96, baseH * hScale);
+        const curX = Math.max(0.5, Math.min(99.5 - curW, baseX - (curW - baseW) / 2));
+        const curY = Math.max(0.5, Math.min(99.5 - curH, baseY - (curH - baseH) / 2));
+
+        container.style.width = curW + '%';
+        container.style.height = curH + '%';
+        container.style.left = curX + '%';
+        container.style.top = curY + '%';
+
+        if (doesTextFit(chosenFont)) {
+          break; // Текст виден на все 100% — останавливаем расширение!
+        }
+      }
+
+      // Final guarantee: если при максимальном расширении всё ещё тесно,
+      // делаем микро-подгонку шрифта (MIN_READABLE_PX)
+      if (!doesTextFit(chosenFont)) {
+        for (let s = chosenFont; s >= 8; s--) {
+          if (doesTextFit(s)) {
+            break;
+          }
+        }
+      }
+    }
+
+    // ==================== IN-BUBBLE TEXT REPLACEMENT ====================
+
+    async function loadCachedReplacements(pageIdx) {
+      const layer = document.getElementById('replacementsLayer');
+      layer.innerHTML = '';
+
+      try {
+        const resp = await fetch(`/api/page-overlays/${MANGA_NAME}/${FILENAME}/${pageIdx}`);
+        const items = await resp.json();
+        
+        items.forEach(item => {
+          if (!item.box || !item.natural) return;
+          renderInBubbleCard(item.box, item);
+        });
+      } catch (e) {
+        console.error('Replacements error:', e);
+      }
+    }
+
+    function renderInBubbleCard(box, data) {
+      const layer = document.getElementById('replacementsLayer');
+      
+      const existing = layer.querySelector(`[data-box-key="${box.x}_${box.y}"]`);
+      if (existing) existing.remove();
+
+      const el = document.createElement('div');
+      el.className = 'in-bubble-replacement';
+      el.setAttribute('data-box-key', `${box.x}_${box.y}`);
+      
+      // Store original detected bubble dimensions as baseline anchor
+      el.dataset.origX = box.x;
+      el.dataset.origY = box.y;
+      el.dataset.origW = box.w;
+      el.dataset.origH = box.h;
+      el.dataset.origText = data.original || '';
+
+      el.style.left = box.x + '%';
+      el.style.top = box.y + '%';
+      el.style.width = box.w + '%';
+      el.style.height = box.h + '%';
+      
+      const textSpan = document.createElement('span');
+      textSpan.className = 'in-bubble-text';
+      textSpan.innerText = data.natural || data.translated || '';
+      el.appendChild(textSpan);
+
+      // Single Click vs Double Click handling
+      let clickTimeout = null;
+      let lastTapTime = 0;
+
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const currentTime = new Date().getTime();
+        const tapLength = currentTime - lastTapTime;
+
+        if (tapLength < 320 && tapLength > 0) {
+          // Double click detected: CLOSE / REMOVE translation overlay
+          clearTimeout(clickTimeout);
+          clickTimeout = null;
+          el.remove();
+          return;
+        }
+
+        lastTapTime = currentTime;
+        clickTimeout = setTimeout(() => {
+          // Single Click: Re-play Neural Male Voice with Contextual Emotion
+          if (data.original) {
+            playVoiceTTS(data.original, data.emotion || 'neutral');
+          }
+        }, 320);
+      });
+
+      // Long-press or right-click: Open deep details
+      let pressTimer;
+      el.onmousedown = el.ontouchstart = () => {
+        pressTimer = setTimeout(() => openDetailsModal(data), 550);
+      };
+      el.onmouseup = el.ontouchend = () => clearTimeout(pressTimer);
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        openDetailsModal(data);
+      };
+
+      layer.appendChild(el);
+      requestAnimationFrame(() => fitBubbleText(el));
+    }
+
+    async function replaceAllBubblesWithRussian() {
+      const bubbles = await (await fetch(`/api/detect-bubbles/${MANGA_NAME}/${FILENAME}/${currentPageIdx}`)).json();
+      for (const b of bubbles) {
+        handleBubbleAction(b.box, false);
+      }
+    }
+
+    // ==================== BUBBLE DETECTION ====================
+
+    async function detectAndShowBubbles() {
+      try {
+        const resp = await fetch(`/api/detect-bubbles/${MANGA_NAME}/${FILENAME}/${currentPageIdx}`);
+        const bubbles = await resp.json();
+        
+        const layer = document.getElementById('bubblesLayer');
+        layer.innerHTML = '';
+
+        bubbles.forEach((b) => {
+          const zone = document.createElement('div');
+          zone.className = 'bubble-zone';
+          zone.style.left = b.box.x + '%';
+          zone.style.top = b.box.y + '%';
+          zone.style.width = b.box.w + '%';
+          zone.style.height = b.box.h + '%';
+
+          zone.onclick = (e) => {
+            e.stopPropagation();
+            handleBubbleAction(b.box, true);
+          };
+          layer.appendChild(zone);
+        });
+      } catch (err) {
+        alert('Ошибка детекции: ' + err);
+      }
+    }
+
+    function clearBubbles() {
+      document.getElementById('bubblesLayer').innerHTML = '';
+      document.getElementById('selectionBox').style.display = 'none';
+    }
+
+    async function handleBubbleAction(box, autoPlay = true) {
+      const layer = document.getElementById('replacementsLayer');
+      const tempLoading = document.createElement('div');
+      tempLoading.className = 'in-bubble-replacement text-primary';
+      tempLoading.style.left = box.x + '%';
+      tempLoading.style.top = box.y + '%';
+      tempLoading.style.width = box.w + '%';
+      tempLoading.style.height = box.h + '%';
+      tempLoading.innerHTML = '<span class="loading loading-spinner loading-xs"></span>';
+      layer.appendChild(tempLoading);
+
+      try {
+        const resp = await fetch('/api/translate-region', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            manga_name: MANGA_NAME,
+            filename: FILENAME,
+            page_idx: currentPageIdx,
+            box: box
+          })
+        });
+        const data = await resp.json();
+        tempLoading.remove();
+        
+        renderInBubbleCard(box, data);
+
+        // Immediate Neural Male Voice Playback with Contextual Emotion!
+        if (autoPlay && data.original) {
+          playVoiceTTS(data.original, data.emotion || 'neutral');
+        }
+
+      } catch (err) {
+        tempLoading.remove();
+        console.error('Translation error:', err);
+      }
+    }
+
+    // ==================== COMPACT DETAILS MODAL ====================
+
+    function openDetailsModal(data) {
+      activeAudioText = data.original || '';
+      document.getElementById('dockOrig').innerText = data.original || '';
+      document.getElementById('dockIpa').innerText = data.ipa || '';
+      document.getElementById('dockLiteral').innerText = data.literal ? `Дословно: ${data.literal}` : '';
+      document.getElementById('dockNatural').innerText = data.natural || data.translated || '';
+
+      const vocabBox = document.getElementById('dockVocabList');
+      vocabBox.innerHTML = '';
+      if (data.vocabulary && Object.keys(data.vocabulary).length > 0) {
+        document.getElementById('dockVocabSection').style.display = 'block';
+        for (const [w, note] of Object.entries(data.vocabulary)) {
+          const badge = document.createElement('button');
+          badge.className = 'badge badge-outline badge-secondary py-2 px-2.5 gap-1 text-[11px] font-semibold hover:bg-secondary/20 transition-all';
+          badge.innerHTML = `<span class="font-extrabold text-primary">${w}</span>: <span>${note}</span>`;
+          badge.onclick = () => playVoiceTTS(w);
+          vocabBox.appendChild(badge);
+        }
+      } else {
+        document.getElementById('dockVocabSection').style.display = 'none';
+      }
+
+      document.getElementById('compactDetailsModal').classList.add('open');
+    }
+
+    function closeDetailsModal() {
+      document.getElementById('compactDetailsModal').classList.remove('open');
+    }
+
+    // ==================== MANUAL SELECTION ====================
+
+    function toggleSelectMode() {
+      isSelectMode = !isSelectMode;
+      const wrap = document.getElementById('pageWrapper');
+      if (isSelectMode) {
+        wrap.classList.add('select-mode-active');
+        document.getElementById('leftTapZone').style.display = 'none';
+        document.getElementById('rightTapZone').style.display = 'none';
+        document.getElementById('centerTapZone').style.display = 'none';
+      } else {
+        wrap.classList.remove('select-mode-active');
+        document.getElementById('leftTapZone').style.display = 'block';
+        document.getElementById('rightTapZone').style.display = 'block';
+        document.getElementById('centerTapZone').style.display = 'block';
+        document.getElementById('selectionBox').style.display = 'none';
+      }
+    }
+
+    function setupSelectionHandlers() {
+      const wrap = document.getElementById('pageWrapper');
+      const box = document.getElementById('selectionBox');
+
+      function getCoords(e) {
+        const rect = wrap.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return {
+          x: clientX - rect.left,
+          y: clientY - rect.top,
+          wTotal: rect.width,
+          hTotal: rect.height
+        };
+      }
+
+      function onStart(e) {
+        if (!isSelectMode) return;
+        isDragging = true;
+        const p = getCoords(e);
+        startX = p.x;
+        startY = p.y;
+        box.style.left = startX + 'px';
+        box.style.top = startY + 'px';
+        box.style.width = '0px';
+        box.style.height = '0px';
+        box.style.display = 'block';
+      }
+
+      function onMove(e) {
+        if (!isSelectMode || !isDragging) return;
+        const p = getCoords(e);
+        const curX = p.x;
+        const curY = p.y;
+
+        const left = Math.min(startX, curX);
+        const top = Math.min(startY, curY);
+        const width = Math.abs(curX - startX);
+        const height = Math.abs(curY - startY);
+
+        box.style.left = left + 'px';
+        box.style.top = top + 'px';
+        box.style.width = width + 'px';
+        box.style.height = height + 'px';
+      }
+
+      function onEnd(e) {
+        if (!isSelectMode || !isDragging) return;
+        isDragging = false;
+        
+        const rect = wrap.getBoundingClientRect();
+        const bRect = box.getBoundingClientRect();
+
+        const xPct = Math.max(0, ((bRect.left - rect.left) / rect.width) * 100);
+        const yPct = Math.max(0, ((bRect.top - rect.top) / rect.height) * 100);
+        const wPct = (bRect.width / rect.width) * 100;
+        const hPct = (bRect.height / rect.height) * 100;
+
+        if (wPct > 3 && hPct > 2) {
+          handleBubbleAction({ x: xPct, y: yPct, w: wPct, h: hPct }, true);
+        }
+      }
+
+      wrap.addEventListener('mousedown', onStart);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onEnd);
+
+      wrap.addEventListener('touchstart', onStart, { passive: true });
+      window.addEventListener('touchmove', onMove, { passive: true });
+      window.addEventListener('touchend', onEnd);
+    }
+
+    // ==================== NEURAL AI VOICE (MALE) WITH CONTEXT ====================
+
+    function playVoiceTTS(text, emotion = 'neutral') {
+      if (!text) return;
+      activeAudioText = text;
+      const audio = document.getElementById('ttsAudio');
+      audio.src = `/api/voice-tts?lang=fr&text=${encodeURIComponent(text)}&emotion=${encodeURIComponent(emotion)}`;
+      audio.play().catch(e => console.log('Audio error:', e));
+    }
+
+    function playActiveAudio() {
+      if (activeAudioText) playVoiceTTS(activeAudioText, activeAudioEmotion);
+    }
+
+    // ==================== BATCH CHAPTER TRANSLATION ====================
+
+    function batchTranslateChapterModal() {
+      document.getElementById('batchModal').showModal();
+    }
+
+    async function startBatchTranslation() {
+      const btn = document.getElementById('batchStartBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading loading-spinner loading-xs"></span> Перевод...';
+
+      const box = document.getElementById('batchProgressBox');
+      box.classList.remove('hidden');
+      const stText = document.getElementById('batchStatusText');
+      const pBar = document.getElementById('batchBar');
+      const pPct = document.getElementById('batchPct');
+
+      try {
+        const resp = await fetch('/api/batch-translate-chapter', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            manga_name: MANGA_NAME,
+            filename: FILENAME,
+            start_page: 0
+          })
+        });
+        const { task_id } = await resp.json();
+
+        const timer = setInterval(async () => {
+          const tResp = await fetch('/api/task/' + task_id);
+          const task = await tResp.json();
+          stText.innerText = task.message || task.status;
+          const pct = task.total_pages > 0 ? Math.round((task.completed_pages / task.total_pages) * 100) : 0;
+          pBar.value = pct;
+          pPct.innerText = pct + '%';
+
+          if (task.status === 'completed' || task.status === 'failed') {
+            clearInterval(timer);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-play"></i> Запустить';
+            if (task.status === 'completed') {
+              loadCachedReplacements(currentPageIdx);
+              setTimeout(() => document.getElementById('batchModal').close(), 1200);
+            }
+          }
+        }, 1500);
+      } catch (err) {
+        alert('Ошибка: ' + err);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-play"></i> Запустить';
+      }
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') nextPage();
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') prevPage();
+      if (e.key === 't' || e.key === 'T') toggleSelectMode();
+      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+      if (e.key === 'Escape') closeDetailsModal();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+# MangaKawaii Downloader & API
+
+API и инструмент для скачивания манги с сайта `mangakawaii.fr` в стандартный манга-формат **CBZ** (Comic Book Zip).
+
+## Особенности
+- **Обход Cloudflare**: использование браузерного TLS-fingerprint (Chrome impersonation via `curl_cffi`).
+- **Формат CBZ**: архив со сжатием, корректная нумерация страниц (`001.jpg`, `002.png`), совместим с Tachiyomi, Mihon, Moon+ Reader, Panels, CDisplayEx.
+- **Фильтрация ловушек**: автоматическое удаление скрытых anti-bot изображений (`__mk_trap__`).
+- **REST API (FastAPI)**: эндпоинты для получения метаданных, страниц глав, запуска фоновых скачиваний и мониторинга прогресса.
+- **CLI**: консольная утилита с индикатором прогресса и возобновлением закачки (пропуск уже скачанных глав).
+
+---
+
+## Структура проекта
+```
+/root/mangakawaii-downloader/
+├── mangakawaii_scraper.py   # Клиент парсера и загрузчика
+├── api.py                   # FastAPI REST API сервис
+├── cli.py                   # Консольная утилита скачивания
+└── README.md                # Документация
+```
+
+---
+
+## Запуск REST API
+```bash
+cd /root/mangakawaii-downloader
+PYTHONPATH=. uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+### Документация Swagger UI
+После запуска доступна по адресу: `http://localhost:8000/docs`
+
+---
+
+## Эндпоинты API
+
+### 1. Информация о манге и список глав
+`GET /manga/{slug}`
+Пример:
+```bash
+curl http://localhost:8000/manga/kaze-to-ki-no-uta
+```
+Ответ:
+```json
+{
+  "slug": "kaze-to-ki-no-uta",
+  "title": "Kaze to Ki no Uta",
+  "description": "L'histoire se déroule en France...",
+  "cover_url": "https://cdn.mangakawaii.fr/uploads/...",
+  "total_chapters": 39,
+  "chapters": [
+    {"number": "1", "title": "Ch. 1", "url": "https://www.mangakawaii.fr/manga/kaze-to-ki-no-uta/1"},
+    ...
+  ]
+}
+```
+
+### 2. Получение ссылок на страницы главы
+`GET /manga/{slug}/chapter/{number}/pages`
+Пример:
+```bash
+curl http://localhost:8000/manga/kaze-to-ki-no-uta/chapter/1/pages
+```
+
+### 3. Запуск фоновой выкачки манги в CBZ
+`POST /manga/{slug}/download`
+Тело запроса (JSON):
+```json
+{
+  "from_chapter": 1,
+  "to_chapter": 39,
+  "concurrency": 6,
+  "output_dir": "/root/manga_downloads/Kaze_to_Ki_no_Uta"
+}
+```
+Ответ:
+```json
+{
+  "task_id": "9a7b6a12-...",
+  "status": "queued",
+  "check_url": "/tasks/9a7b6a12-..."
+}
+```
+
+### 4. Проверка статуса задачи
+`GET /tasks/{task_id}`
+
+### 5. Список скачанных файлов
+`GET /downloads?slug=kaze-to-ki-no-uta`
+
+---
+
+## Запуск через CLI
+
+Выкачать все части манги:
+```bash
+PYTHONPATH=/root/mangakawaii-downloader python3 /root/mangakawaii-downloader/cli.py --slug kaze-to-ki-no-uta --output /root/manga_downloads/Kaze_to_Ki_no_Uta
+```
+
+Выкачать диапазон глав (например, с 1 по 10):
+```bash
+PYTHONPATH=/root/mangakawaii-downloader python3 /root/mangakawaii-downloader/cli.py --slug kaze-to-ki-no-uta --start 1 --end 10
+```

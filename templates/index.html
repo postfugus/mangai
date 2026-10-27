@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Manga Cloud & Reader</title>
+  
+  <!-- Tailwind CSS & DaisyUI via CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-base-300 text-base-content min-h-screen flex flex-col font-sans selection:bg-primary selection:text-primary-content">
+
+  <!-- Navbar -->
+  <div class="navbar bg-base-100 shadow-lg sticky top-0 z-50 px-4 sm:px-8 border-b border-base-200">
+    <div class="flex-1">
+      <a href="/" class="btn btn-ghost text-xl normal-case gap-2 font-extrabold tracking-tight">
+        <i class="fa-solid fa-book-open-reader text-primary text-2xl"></i>
+        <span>Manga<span class="text-primary">Reader</span></span>
+      </a>
+    </div>
+    <div class="flex-none gap-2">
+      <!-- Stats Badge -->
+      <div class="badge badge-primary badge-outline gap-1 font-semibold py-3 px-4 hidden sm:inline-flex">
+        <i class="fa-solid fa-hard-drive"></i>
+        <span>{{ total_files }} глав · {{ total_size_mb }} MB</span>
+      </div>
+      
+      <!-- Download Modal Button -->
+      <button onclick="download_modal.showModal()" class="btn btn-primary btn-sm sm:btn-md gap-2 font-bold shadow-md shadow-primary/20">
+        <i class="fa-solid fa-cloud-arrow-down"></i>
+        <span class="hidden sm:inline">Выкачать мангу</span>
+        <span class="sm:hidden">Скачать</span>
+      </button>
+
+      <!-- Theme Controller Dropdown -->
+      <div class="dropdown dropdown-end">
+        <div tabindex="0" role="button" class="btn btn-ghost btn-circle">
+          <i class="fa-solid fa-palette text-lg"></i>
+        </div>
+        <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-base-200 rounded-box w-40 border border-base-300">
+          <li><button onclick="setTheme('dark')">🌙 Dark</button></li>
+          <li><button onclick="setTheme('night')">🌌 Night</button></li>
+          <li><button onclick="setTheme('forest')">🌲 Forest</button></li>
+          <li><button onclick="setTheme('luxury')">👑 Luxury</button></li>
+          <li><button onclick="setTheme('synthwave')">🌆 Synthwave</button></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hero Section -->
+  <div class="max-w-5xl mx-auto w-full px-4 pt-6 pb-2">
+    <!-- Search Bar -->
+    <div class="form-control w-full mb-6">
+      <div class="relative">
+        <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-base-content/40">
+          <i class="fa-solid fa-magnifying-glass"></i>
+        </span>
+        <input type="text" id="searchInput" onkeyup="filterChapters()" placeholder="Быстрый поиск главы (например: Ch. 01, Kaze...)" class="input input-bordered w-full pl-11 bg-base-100 shadow-sm focus:input-primary rounded-2xl" />
+      </div>
+    </div>
+
+    <!-- Manga Content List -->
+    {% if not mangas %}
+      <div class="hero bg-base-100 rounded-3xl p-10 border border-base-200 shadow-sm my-6">
+        <div class="hero-content text-center">
+          <div class="max-w-md">
+            <i class="fa-solid fa-box-open text-6xl text-base-content/20 mb-4"></i>
+            <h1 class="text-2xl font-bold">Скачанных глав пока нет</h1>
+            <p class="py-4 text-base-content/60">Воспользуйтесь кнопкой «Выкачать мангу», чтобы загрузить любую мангу с сайта mangakawaii.fr.</p>
+            <button onclick="download_modal.showModal()" class="btn btn-primary">Скачать мангу</button>
+          </div>
+        </div>
+      </div>
+    {% else %}
+      {% for manga_name, chapters in mangas.items() %}
+        <div class="card bg-base-100 border border-base-200 shadow-md mb-8 overflow-hidden rounded-3xl manga-card" data-group="{{ manga_name.lower() }}">
+          <!-- Manga Header Banner -->
+          <div class="bg-gradient-to-r from-base-200 via-base-100 to-base-200 p-5 sm:p-6 border-b border-base-200 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+              <div class="avatar placeholder">
+                <div class="bg-primary/10 text-primary rounded-2xl w-14 h-14 flex items-center justify-center font-black text-2xl border border-primary/20 shadow-inner">
+                  <i class="fa-solid fa-book-bookmark"></i>
+                </div>
+              </div>
+              <div>
+                <h2 class="text-xl sm:text-2xl font-black text-base-content tracking-tight">{{ manga_name.replace('_', ' ') }}</h2>
+                <div class="flex items-center gap-2 mt-1">
+                  <span class="badge badge-sm badge-secondary font-bold">{{ chapters|length }} глав</span>
+                  <span class="text-xs text-base-content/50">Формат CBZ · Высокое качество</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Read First Chapter Button -->
+            {% if chapters %}
+              <a href="/reader/{{ manga_name }}/{{ chapters[0].filename }}" class="btn btn-primary btn-sm sm:btn-md gap-2 font-bold shadow-lg shadow-primary/20">
+                <i class="fa-solid fa-play"></i>
+                <span>Читать с 1 главы</span>
+              </a>
+            {% endif %}
+          </div>
+
+          <!-- Chapters List -->
+          <div class="p-4 sm:p-6 divide-y divide-base-200/60">
+            {% for ch in chapters %}
+              <div class="chapter-item py-3.5 flex items-center justify-between gap-3 hover:bg-base-200/40 px-3 rounded-2xl transition-all" data-title="{{ ch.filename.lower() }}">
+                <div class="flex items-center gap-3.5 min-w-0">
+                  <div class="w-8 h-8 rounded-xl bg-base-200 flex items-center justify-center font-bold text-xs text-base-content/60 flex-shrink-0">
+                    {{ loop.index }}
+                  </div>
+                  <div class="min-w-0">
+                    <div class="font-bold text-sm sm:text-base text-base-content truncate">{{ ch.filename }}</div>
+                    <div class="text-xs text-base-content/50 flex items-center gap-3 mt-0.5">
+                      <span><i class="fa-solid fa-file-zipper mr-1"></i>{{ ch.size_mb }} MB</span>
+                      <span><i class="fa-regular fa-clock mr-1"></i>{{ ch.modified }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <!-- Read Button -->
+                  <a href="/reader/{{ manga_name }}/{{ ch.filename }}" class="btn btn-ghost btn-sm text-primary hover:bg-primary/10 gap-1.5 font-bold">
+                    <i class="fa-solid fa-book-open"></i>
+                    <span class="hidden sm:inline">Читать</span>
+                  </a>
+
+                  <!-- Download CBZ Button -->
+                  <a href="/download-file/{{ ch.rel_path }}" download="{{ ch.filename }}" class="btn btn-outline btn-sm gap-1.5 font-semibold hover:btn-primary">
+                    <i class="fa-solid fa-download"></i>
+                    <span class="hidden sm:inline">CBZ</span>
+                  </a>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+
+  <!-- Download New Manga Modal -->
+  <dialog id="download_modal" class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box bg-base-100 border border-base-200 shadow-2xl rounded-3xl">
+      <form method="dialog">
+        <button class="btn btn-sm btn-circle btn-ghost absolute right-4 top-4">✕</button>
+      </form>
+      <h3 class="font-extrabold text-xl flex items-center gap-2 mb-4">
+        <i class="fa-solid fa-cloud-arrow-down text-primary"></i>
+        <span>Выкачать мангу с MangaKawaii</span>
+      </h3>
+      
+      <form id="dlForm" onsubmit="startDownload(event)" class="space-y-4">
+        <div class="form-control">
+          <label class="label"><span class="label-text font-bold">Ссылка или Slug</span></label>
+          <input type="text" id="mangaSlug" placeholder="например: kaze-to-ki-no-uta" class="input input-bordered focus:input-primary rounded-xl" required />
+          <label class="label"><span class="label-text-alt text-base-content/60">Можно вставить полную ссылку или название из URL</span></label>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="form-control">
+            <label class="label"><span class="label-text font-bold">С главы</span></label>
+            <input type="number" step="any" id="fromChapter" placeholder="1" class="input input-bordered focus:input-primary rounded-xl" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text font-bold">По главу</span></label>
+            <input type="number" step="any" id="toChapter" placeholder="39" class="input input-bordered focus:input-primary rounded-xl" />
+          </div>
+        </div>
+
+        <button type="submit" id="submitBtn" class="btn btn-primary w-full font-bold text-base shadow-lg shadow-primary/20 mt-2">
+          <i class="fa-solid fa-download mr-1"></i> Начать загрузку
+        </button>
+      </form>
+
+      <!-- Progress Section -->
+      <div id="progressBox" class="mt-6 hidden bg-base-200/60 p-4 rounded-2xl border border-base-200">
+        <div class="flex justify-between items-center text-sm font-semibold mb-2">
+          <span id="progressText" class="truncate max-w-[70%]">Подготовка...</span>
+          <span id="progressPct" class="badge badge-primary font-bold">0%</span>
+        </div>
+        <progress id="progressBar" class="progress progress-primary w-full" value="0" max="100"></progress>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- JavaScript -->
+  <script>
+    function setTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('mk-theme', theme);
+    }
+    const savedTheme = localStorage.getItem('mk-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+
+    function filterChapters() {
+      const q = document.getElementById('searchInput').value.toLowerCase();
+      document.querySelectorAll('.chapter-item').forEach(el => {
+        const text = el.getAttribute('data-title');
+        el.style.display = text.includes(q) ? 'flex' : 'none';
+      });
+      document.querySelectorAll('.manga-card').forEach(card => {
+        const visible = card.querySelectorAll('.chapter-item[style="display: flex;"]').length > 0 || q === '';
+        card.style.display = visible ? 'block' : 'none';
+      });
+    }
+
+    async function startDownload(e) {
+      e.preventDefault();
+      const slugVal = document.getElementById('mangaSlug').value.trim();
+      const fromCh = document.getElementById('fromChapter').value;
+      const toCh = document.getElementById('toChapter').value;
+      const slug = slugVal.replace(/^https?:\/\/[^\/]+\/manga\//, '').replace(/\/.*$/, '');
+
+      const submitBtn = document.getElementById('submitBtn');
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="loading loading-spinner loading-sm"></span> Запуск...';
+
+      const box = document.getElementById('progressBox');
+      box.classList.remove('hidden');
+      const pText = document.getElementById('progressText');
+      const pPct = document.getElementById('progressPct');
+      const pBar = document.getElementById('progressBar');
+
+      try {
+        const resp = await fetch('/api/download-task', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            url_or_slug: slug,
+            from_chapter: fromCh ? parseFloat(fromCh) : null,
+            to_chapter: toCh ? parseFloat(toCh) : null
+          })
+        });
+        const data = await resp.json();
+        const taskId = data.task_id;
+
+        const timer = setInterval(async () => {
+          const sResp = await fetch('/api/task/' + taskId);
+          const task = await sResp.json();
+          pText.innerText = task.message || task.status;
+          const pct = task.total_chapters > 0 
+            ? Math.round((task.completed_chapters / task.total_chapters) * 100) 
+            : 0;
+          pPct.innerText = pct + '%';
+          pBar.value = pct;
+
+          if (task.status === 'completed' || task.status === 'failed') {
+            clearInterval(timer);
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fa-solid fa-download mr-1"></i> Начать загрузку';
+            if (task.status === 'completed') {
+              setTimeout(() => location.reload(), 1200);
+            }
+          }
+        }, 1500);
+
+      } catch (err) {
+        alert('Ошибка: ' + err);
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fa-solid fa-download mr-1"></i> Начать загрузку';
+      }
+    }
+  </script>
+</body>
+</html>

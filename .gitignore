@@ -1,0 +1,29 @@
+# Python / Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+env/
+venv/
+
+# Environment Variables & Secrets
+.env
+*.env
+
+# Local SQLite Database & Caches
+*.db
+*.db-journal
+*.sqlite3
+translations_cache.db
+
+# Audio / Temp Files
+*.wav
+*.mp3
+*.pcm
+/tmp/
+
+# Downloaded Manga Media
+manga_downloads/
+*.cbz
+*.zip
