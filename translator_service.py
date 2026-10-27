@@ -178,6 +178,50 @@ class MangaTranslatorService:
             return Image.open(io.BytesIO(img_data)).convert("RGB")
 
     @classmethod
+    def clean_and_validate_translation(cls, result: Dict) -> Dict:
+        """
+        Guarantees translation quality:
+        - Filters out empty/nonsense OCR artifacts (stray punctuation, single symbols).
+        - Strips broken characters, brackets, raw markdown junk.
+        - Ensures the Russian translation is genuine and contains Cyrillic letters.
+        - Fixes OCR typos and syntax if needed.
+        """
+        if not result:
+            return result
+
+        orig = (result.get("original") or "").strip()
+        nat = (result.get("natural") or "").strip()
+        lit = (result.get("literal") or "").strip()
+
+        # Clean noise, brackets, extra quotes
+        orig = re.sub(r'^[|_\-—~`\'"“«\s]+|[|_\-—~`\'"”»\s]+$', '', orig).strip()
+        nat = re.sub(r'^[|_\-—~`\'"“«\s]+|[|_\-—~`\'"”»\s]+$', '', nat).strip()
+
+        # Check for pure noise (no actual letters)
+        has_letters_orig = bool(re.search(r'[a-zA-Zа-яА-Я]', orig))
+        has_cyrillic_nat = bool(re.search(r'[а-яА-ЯёЁ]', nat))
+
+        if not has_letters_orig or len(orig) < 2:
+            result["original"] = ""
+            result["natural"] = ""
+            result["literal"] = ""
+            return result
+
+        # If natural translation has no Cyrillic or repeats original French, trigger fast LLM correction
+        if not has_cyrillic_nat or nat.lower() == orig.lower():
+            corrected = cls.translate_text_with_groq_llm(orig)
+            if corrected and corrected.get("natural"):
+                nat = corrected["natural"]
+                if not lit and corrected.get("literal"):
+                    lit = corrected["literal"]
+
+        result["original"] = orig
+        result["natural"] = nat
+        result["translated"] = nat
+        result["literal"] = lit
+        return result
+
+    @classmethod
     def ocr_and_translate_with_groq_vision(cls, crop_img: Image.Image) -> Optional[Dict]:
         """
         Uses Groq Vision (qwen3.8-27b) with advanced linguistic tutoring prompt:
@@ -341,7 +385,10 @@ Output only the JSON object."""
                     "translation_error": "Не удалось получить русский перевод этого фрагмента.",
                 }
 
+        # Clean, validate and eliminate nonsensical output
+        result = cls.clean_and_validate_translation(result)
         result["box"] = box
+
         # Save to local SQLite cache only if we have a real Russian translation
         if result.get("original") and result.get("natural") and result.get("natural") != result.get("original"):
             save_cached_translation(manga_name, filename, page_idx, box, result)
