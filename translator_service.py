@@ -9,8 +9,9 @@ import numpy as np
 from PIL import Image, ImageEnhance
 import requests
 import pytesseract
+from pathlib import Path
 
-from db_cache import get_cached_translation, save_cached_translation, get_cached_page_bubbles, save_cached_page_bubbles
+from db_cache import get_cached_translation, save_cached_translation, get_cached_page_bubbles, save_cached_page_bubbles, delete_cached_translations_for_boxes
 
 try:
     import ai_edge_litert.interpreter as litert
@@ -18,8 +19,56 @@ try:
 except ImportError:
     HAS_LITERT = False
 
+try:
+    import ctranslate2
+    import sentencepiece as spm
+except ImportError:
+    ctranslate2 = None
+    spm = None
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+LOCAL_MODELS_DIR = Path(__file__).parent / ".local_models"
+TESSDATA_DIR = LOCAL_MODELS_DIR / "tessdata"
+
+
+class OfflineFrenchRussianTranslator:
+    """Small, persistent CPU translator: French → English → Russian."""
+    _instance = None
+
+    def __init__(self):
+        self.stages = []
+        if ctranslate2 is None or spm is None:
+            return
+        for name in ("fr_en", "en_ru"):
+            root = LOCAL_MODELS_DIR / name
+            model_path = root / "model"
+            tokenizer_path = root / "sentencepiece.model"
+            if not model_path.is_dir() or not tokenizer_path.is_file():
+                self.stages = []
+                return
+            self.stages.append((
+                ctranslate2.Translator(str(model_path), device="cpu", compute_type="int8"),
+                spm.SentencePieceProcessor(model_file=str(tokenizer_path)),
+            ))
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def translate(self, text: str) -> Optional[str]:
+        if not self.stages:
+            return None
+        current = text.strip()
+        for translator, tokenizer in self.stages:
+            tokens = tokenizer.encode(current, out_type=str)
+            result = translator.translate_batch(
+                [tokens], beam_size=2, max_decoding_length=160
+            )[0].hypotheses[0]
+            current = tokenizer.decode(result).replace("▁", " ").strip()
+        return current or None
 
 
 class MangaYOLOModel:
@@ -61,7 +110,7 @@ class MangaYOLOModel:
         detections = []
         for det in output:
             x1_norm, y1_norm, x2_norm, y2_norm, conf, cls_id = det
-            if conf >= conf_threshold:
+            if conf >= (0.12 if int(cls_id) == 1 else conf_threshold):
                 cls_int = int(cls_id)
                 label = "panel" if cls_int == 0 else "text"
                 x1 = max(0.0, min(1.0, float(x1_norm)))
@@ -70,6 +119,11 @@ class MangaYOLOModel:
                 y2 = max(0.0, min(1.0, float(y2_norm)))
 
                 if x2 > x1 and y2 > y1:
+                    box_w = x2 - x1
+                    box_h = y2 - y1
+                    area = box_w * box_h
+                    if cls_int == 1 and (box_w < 0.012 or box_h < 0.008 or area < 0.00025 or area > 0.28):
+                        continue
                     detections.append({
                         "label": label,
                         "class_id": cls_int,
@@ -82,15 +136,42 @@ class MangaYOLOModel:
                         }
                     })
 
-        detections.sort(key=lambda d: d["box"]["y"])
-        return detections
+        # The exported model sometimes returns several overlapping boxes for one
+        # speech area, especially at the lower text threshold. Keep the strongest.
+        kept = []
+        for candidate in sorted(detections, key=lambda d: d["confidence"], reverse=True):
+            a = candidate["box"]
+            suppressed = False
+            for existing in kept:
+                if existing["class_id"] != candidate["class_id"]:
+                    continue
+                b = existing["box"]
+                left, top = max(a["x"], b["x"]), max(a["y"], b["y"])
+                right = min(a["x"] + a["w"], b["x"] + b["w"])
+                bottom = min(a["y"] + a["h"], b["y"] + b["h"])
+                intersection = max(0, right - left) * max(0, bottom - top)
+                union = a["w"] * a["h"] + b["w"] * b["h"] - intersection
+                if union and intersection / union > 0.5:
+                    suppressed = True
+                    break
+            if not suppressed:
+                kept.append(candidate)
+        return sorted(kept, key=lambda d: d["box"]["y"])
 
 
 class MangaTranslatorService:
     @staticmethod
     def extract_image_from_cbz(cbz_path: str, page_idx: int) -> Image.Image:
         with zipfile.ZipFile(cbz_path, "r") as zf:
-            names = sorted([n for n in zf.namelist() if not n.startswith("__MACOSX") and "." in n])
+            image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
+            names = sorted(
+                (n for n in zf.namelist()
+                 if os.path.splitext(n)[1].lower() in image_exts
+                 and not n.startswith("__MACOSX/")
+                 and not os.path.basename(n).startswith(".")),
+                key=lambda value: [int(part) if part.isdigit() else part.casefold()
+                                   for part in re.split(r"(\d+)", value)],
+            )
             if page_idx < 0 or page_idx >= len(names):
                 raise ValueError(f"Page index {page_idx} out of range (total: {len(names)})")
             img_data = zf.read(names[page_idx])
@@ -222,13 +303,29 @@ Output only the JSON object."""
             gray = crop.convert("L")
             enhancer = ImageEnhance.Contrast(gray)
             proc_img = enhancer.enhance(1.8)
-            tess_lang = src_lang if src_lang in ["fra", "eng", "jpn"] else "fra"
-            raw_text = pytesseract.image_to_string(proc_img, lang=tess_lang).strip()
+            tess_lang = {"fra": "fra", "fr": "fra", "eng": "eng", "en": "eng"}.get(src_lang, "fra")
+            tess_config = f'--tessdata-dir "{TESSDATA_DIR}" --psm 6' if (TESSDATA_DIR / f"{tess_lang}.traineddata").is_file() else "--psm 6"
+            if max(proc_img.size) < 1400:
+                scale = 1400 / max(proc_img.size)
+                proc_img = proc_img.resize((int(proc_img.width * scale), int(proc_img.height * scale)), Image.Resampling.LANCZOS)
+            raw_text = pytesseract.image_to_string(proc_img, lang=tess_lang, config=tess_config).strip()
             lines = [re.sub(r"[|_\\/]+", " ", line).strip() for line in raw_text.splitlines()]
             cleaned = " ".join([l for l in lines if len(l) > 1])
 
             # Translate through Groq LLM (gpt-oss-120b) to ensure Russian translation is ALWAYS produced
             translated_result = cls.translate_text_with_groq_llm(cleaned) if cleaned else None
+            if cleaned and not (translated_result and translated_result.get("natural")):
+                offline_ru = OfflineFrenchRussianTranslator.get_instance().translate(cleaned)
+                if offline_ru:
+                    translated_result = {
+                        "original": cleaned,
+                        "ipa": "",
+                        "literal": "",
+                        "natural": offline_ru,
+                        "translated": offline_ru,
+                        "vocabulary": {},
+                        "provider": "Argos Translate (local CPU)",
+                    }
             
             if translated_result and translated_result.get("natural"):
                 result = translated_result
@@ -236,11 +333,12 @@ Output only the JSON object."""
                 result = {
                     "original": cleaned,
                     "ipa": "",
-                    "literal": cleaned,
-                    "natural": (translated_result.get("natural") if translated_result else "") or cleaned,
-                    "translated": (translated_result.get("natural") if translated_result else "") or cleaned,
+                    "literal": "",
+                    "natural": "",
+                    "translated": "",
                     "vocabulary": {},
-                    "provider": "Tesseract + Groq Fallback"
+                    "provider": "Tesseract OCR (перевод не получен)",
+                    "translation_error": "Не удалось получить русский перевод этого фрагмента.",
                 }
 
         result["box"] = box
@@ -311,8 +409,14 @@ Output only the JSON object."""
         Uses cached bubble list if available.
         """
         cached = get_cached_page_bubbles(manga_name, filename, page_idx)
-        if cached is not None:
+        if cached and all(b.get("source") == "yolo26n-v3" for b in cached):
             return cached
+
+        if cached:
+            delete_cached_translations_for_boxes(
+                manga_name, filename, page_idx,
+                [bubble.get("box") for bubble in cached],
+            )
 
         full_img = cls.extract_image_from_cbz(cbz_path, page_idx)
         yolo = MangaYOLOModel.get_instance()
@@ -324,11 +428,14 @@ Output only the JSON object."""
             results.append({
                 "id": idx,
                 "confidence": d["confidence"],
-                "source": "yolo26n",
+                "source": "yolo26n-v3",
                 "box": d["box"]
             })
 
-        save_cached_page_bubbles(manga_name, filename, page_idx, results, is_fully_translated=False)
+        # Empty detector output can mean the model is missing or below threshold;
+        # don't poison the persistent cache with a false "no bubbles" result.
+        if results:
+            save_cached_page_bubbles(manga_name, filename, page_idx, results, is_fully_translated=False)
         return results
 
     @classmethod
@@ -351,5 +458,11 @@ Output only the JSON object."""
             b_copy["translation"] = tr
             enriched.append(b_copy)
         
-        save_cached_page_bubbles(manga_name, filename, page_idx, enriched, is_fully_translated=True)
+        if enriched:
+            fully_translated = all(
+                (b.get("translation") or {}).get("natural")
+                and (b.get("translation") or {}).get("natural") != (b.get("translation") or {}).get("original")
+                for b in enriched
+            )
+            save_cached_page_bubbles(manga_name, filename, page_idx, enriched, is_fully_translated=fully_translated)
         return enriched

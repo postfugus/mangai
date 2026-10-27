@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 env/
 venv/
+.local_models/
 
 # Environment Variables & Secrets
 .env
@@ -19,6 +20,7 @@ translations_cache.db
 
 # Audio / Temp Files
 *.wav
+*.argosmodel
 *.mp3
 *.pcm
 /tmp/

@@ -5,11 +5,17 @@ import time
 from typing import Optional, Dict, List
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "translations_cache.db")
+_db_initialized = False
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    global _db_initialized
+    if _db_initialized:
+        return
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     cur = conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=10000")
     # Cache for translations by manga, chapter, page, and box hash/index
     cur.execute("""
     CREATE TABLE IF NOT EXISTS page_translations (
@@ -56,6 +62,7 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+    _db_initialized = True
 
 
 def make_box_key(box: Optional[Dict]) -> str:
@@ -147,6 +154,45 @@ def get_cached_page_bubbles(manga_name: str, filename: str, page_idx: int) -> Op
     if row:
         return json.loads(row[0])
     return None
+
+
+def is_page_fully_translated(manga_name: str, filename: str, page_idx: int) -> bool:
+    """Return true only for a non-empty page whose positions and translations were saved."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT bubbles_json, is_fully_translated FROM page_bubbles_cache "
+            "WHERE manga_name=? AND filename=? AND page_idx=?",
+            (manga_name, filename, page_idx),
+        ).fetchone()
+        if not row or not row[1]:
+            return False
+        bubbles = json.loads(row[0])
+        return bool(bubbles) and all(
+            bubble.get("source") == "yolo26n-v3"
+            and isinstance(bubble.get("translation"), dict)
+            and bubble["translation"].get("natural")
+            and bubble["translation"].get("natural") != bubble["translation"].get("original")
+            for bubble in bubbles
+        )
+    finally:
+        conn.close()
+
+
+def delete_cached_translations_for_boxes(manga_name: str, filename: str, page_idx: int, boxes: List[Dict]):
+    """Invalidate OCR/translation rows whose detected coordinates came from an old model pass."""
+    keys = [make_box_key(box) for box in boxes if box]
+    if not keys:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.executemany(
+            "DELETE FROM page_translations WHERE manga_name=? AND filename=? AND page_idx=? AND box_key=?",
+            [(manga_name, filename, page_idx, key) for key in keys],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def save_cached_page_bubbles(manga_name: str, filename: str, page_idx: int, bubbles: List[Dict], is_fully_translated: bool = False):

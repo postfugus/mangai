@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+jinja2
+curl-cffi
+beautifulsoup4
+numpy
+pillow
+requests
+pytesseract
+ai-edge-litert
+ctranslate2
+sentencepiece
+elevenlabs
+python-dotenv

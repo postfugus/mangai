@@ -1,32 +1,23 @@
 import os
-import io
 import time
 import uuid
-import wave
-import base64
 import json
+import mimetypes
+import re
 import zipfile
-import urllib.request
-import urllib.parse
 from typing import Optional, List, Dict
+from dotenv import load_dotenv
+from elevenlabs import ElevenLabs
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Query
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-# Automatically load .env if present
-env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-if os.path.exists(env_file):
-    with open(env_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 from mangakawaii_scraper import MangaKawaiiClient
-from translator_service import MangaTranslatorService
-from db_cache import get_all_cached_translations_for_page, get_cached_audio, save_cached_audio, init_db
+from translator_service import MangaTranslatorService, MangaYOLOModel
+from db_cache import get_all_cached_translations_for_page, get_cached_audio, save_cached_audio, init_db, get_cached_page_bubbles, is_page_fully_translated, make_box_key
 
 app = FastAPI(title="Manga Smart Reader & Cloud Hub")
 
@@ -41,6 +32,30 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 client = MangaKawaiiClient()
 
 tasks: Dict[str, Dict] = {}
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
+
+
+def natural_key(value: str):
+    return [int(part) if part.isdigit() else part.casefold()
+            for part in re.split(r"(\d+)", value)]
+
+
+def chapter_path(manga_name: str, filename: str) -> str:
+    # Route parameters must stay inside the configured downloads directory.
+    if os.path.basename(manga_name) != manga_name or os.path.basename(filename) != filename:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return os.path.join(DOWNLOAD_DIR, manga_name, filename)
+
+
+def image_entries(archive: zipfile.ZipFile):
+    return sorted(
+        (name for name in archive.namelist()
+         if os.path.splitext(name)[1].lower() in IMAGE_EXTENSIONS
+         and not name.startswith("__MACOSX/")
+         and not os.path.basename(name).startswith(".")),
+        key=natural_key,
+    )
 
 
 class DownloadRequest(BaseModel):
@@ -75,7 +90,7 @@ def get_all_manga_files():
         manga_path = os.path.join(DOWNLOAD_DIR, manga_name)
         if os.path.isdir(manga_path):
             files = []
-            for f in sorted(os.listdir(manga_path)):
+            for f in os.listdir(manga_path):
                 if f.endswith(".cbz"):
                     full_p = os.path.join(manga_path, f)
                     stat = os.stat(full_p)
@@ -87,10 +102,8 @@ def get_all_manga_files():
                     })
             if files:
                 def sort_key(item):
-                    name = item["filename"]
-                    import re
-                    m = re.search(r"Ch\.(\d+(?:\.\d+)?)", name)
-                    return float(m.group(1)) if m else 999999.0
+                    match = re.search(r"(?:Ch\.|Chapter\s*)(\d+(?:\.\d+)?)", item["filename"], re.I)
+                    return (0, float(match.group(1)), natural_key(item["filename"])) if match else (1, natural_key(item["filename"]))
                 files.sort(key=sort_key)
                 data[manga_name] = files
     return data
@@ -115,12 +128,12 @@ def index_page(request: Request):
 
 @app.get("/reader/{manga_name}/{filename}", response_class=HTMLResponse)
 def reader_page(request: Request, manga_name: str, filename: str):
-    file_path = os.path.join(DOWNLOAD_DIR, manga_name, filename)
+    file_path = chapter_path(manga_name, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     with zipfile.ZipFile(file_path, "r") as zf:
-        pages = sorted([n for n in zf.namelist() if not n.startswith("__MACOSX") and "." in n])
+        pages = image_entries(zf)
 
     all_manga = get_all_manga_files()
     all_chapters = all_manga.get(manga_name, [])
@@ -139,22 +152,27 @@ def reader_page(request: Request, manga_name: str, filename: str):
 
 @app.get("/page-image/{manga_name}/{filename}/{page_idx}")
 def get_page_image(manga_name: str, filename: str, page_idx: int):
-    file_path = os.path.join(DOWNLOAD_DIR, manga_name, filename)
+    file_path = chapter_path(manga_name, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
-            names = sorted([n for n in zf.namelist() if not n.startswith("__MACOSX") and "." in n])
+            names = image_entries(zf)
             if page_idx < 0 or page_idx >= len(names):
                 raise HTTPException(status_code=404, detail="Page index out of range")
             
             target = names[page_idx]
-            ext = target.split(".")[-1].lower()
-            media_type = "image/png" if ext == "png" else "image/webp" if ext == "webp" else "image/jpeg"
+            media_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
             data = zf.read(target)
-            return Response(content=data, media_type=media_type)
-    except Exception as e:
+            return Response(
+                content=data,
+                media_type=media_type,
+                headers={"Cache-Control": "private, max-age=86400"},
+            )
+    except HTTPException:
+        raise
+    except (zipfile.BadZipFile, OSError, KeyError) as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -164,7 +182,7 @@ def translate_region(req: TranslateRegionRequest):
     OCRs and translates a user-selected crop box or dialog bubble.
     Checks local SQLite cache first before calling Groq Vision.
     """
-    file_path = os.path.join(DOWNLOAD_DIR, req.manga_name, req.filename)
+    file_path = chapter_path(req.manga_name, req.filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Chapter not found")
 
@@ -190,9 +208,12 @@ def detect_bubbles(manga_name: str, filename: str, page_idx: int):
     Detects all speech bubbles on the given page using YOLO26n.
     Results are cached locally.
     """
-    file_path = os.path.join(DOWNLOAD_DIR, manga_name, filename)
+    file_path = chapter_path(manga_name, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Chapter not found")
+
+    if not MangaYOLOModel.get_instance().interpreter:
+        raise HTTPException(status_code=503, detail="Bubble detector is unavailable. Install dependencies from requirements.txt.")
 
     try:
         bubbles = MangaTranslatorService.detect_bubbles(
@@ -211,110 +232,68 @@ def get_page_overlays(manga_name: str, filename: str, page_idx: int):
     """
     Returns all pre-cached translations for this page to display parallel Russian overlays!
     """
-    return get_all_cached_translations_for_page(manga_name, filename, page_idx)
+    items = get_all_cached_translations_for_page(manga_name, filename, page_idx)
+    saved_bubbles = get_cached_page_bubbles(manga_name, filename, page_idx) or []
+    if saved_bubbles and any(bubble.get("source") != "yolo26n-v3" for bubble in saved_bubbles):
+        stale_keys = {make_box_key(bubble.get("box")) for bubble in saved_bubbles if bubble.get("box")}
+        items = [item for item in items if make_box_key(item.get("box")) not in stale_keys]
+    return items
 
 
-# Pure Google Gemini Flash Neural TTS Engine (Male Voice: Algieba)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# ElevenLabs multilingual TTS (George, male narrative voice)
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
+ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_v4")
+ELEVENLABS_VOICE_TAG = f"elevenlabs_{ELEVENLABS_MODEL_ID}_{ELEVENLABS_VOICE_ID}_fr"
+_elevenlabs_client = None
 
-# Models on separate Gemini TTS rate limits
-GEMINI_TTS_MODELS = [
-    "gemini-3.8-flash-tts",
-    "gemini-3.8-flash-lite-tts",
-    "gemini-3.1-flash-tts-preview"
-]
 
-def call_google_gemini_tts(clean_text: str) -> bytes:
-    """
-    Direct call strictly to Google Gemini Flash TTS (Voice: Algieba).
-    Rotates between Google Gemini Flash TTS models if one hits a temporary rate limit.
-    """
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": clean_text}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": "algieba"
-                    }
-                }
-            }
-        }
-    }).encode('utf-8')
-
-    last_err = None
-
-    for model in GEMINI_TTS_MODELS:
-        gemini_tts_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(
-                    gemini_tts_url,
-                    data=payload,
-                    headers={"Content-Type": "application/json"}
-                )
-                resp = urllib.request.urlopen(req, timeout=12)
-                res_data = json.loads(resp.read().decode('utf-8'))
-                candidates = res_data.get("candidates", [])
-                
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    for p in parts:
-                        if "inlineData" in p:
-                            mime_type = p["inlineData"].get("mimeType", "audio/wav")
-                            audio_data = base64.b64decode(p["inlineData"]["data"])
-                            
-                            if "pcm" in mime_type.lower() or not audio_data.startswith(b"RIFF"):
-                                wav_io = io.BytesIO()
-                                with wave.open(wav_io, "wb") as wf:
-                                    wf.setnchannels(1)
-                                    wf.setsampwidth(2)
-                                    wf.setframerate(24000)
-                                    wf.writeframes(audio_data)
-                                return wav_io.getvalue()
-                            return audio_data
-            except urllib.error.HTTPError as e:
-                last_err = e
-                if e.code == 429:
-                    # Switch to next Google Gemini model immediately
-                    break
-                time.sleep(0.5)
-            except Exception as e:
-                last_err = e
-                time.sleep(0.5)
-
-    raise RuntimeError(f"Google Gemini Flash TTS error: {last_err}")
-
+def call_elevenlabs_tts(clean_text: str, language: str = "fr") -> bytes:
+    """Synthesize speech with ElevenLabs and return compressed MP3 bytes."""
+    global _elevenlabs_client
+    if not ELEVENLABS_API_KEY:
+        raise RuntimeError("ELEVENLABS_API_KEY is not configured")
+    if _elevenlabs_client is None:
+        _elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+    audio_stream = _elevenlabs_client.text_to_speech.convert(
+        voice_id=ELEVENLABS_VOICE_ID,
+        text=clean_text,
+        model_id=ELEVENLABS_MODEL_ID,
+        language_code=language if language in {"fr", "en", "ru"} else "fr",
+        output_format="mp3_44100_128",
+    )
+    audio_bytes = b"".join(audio_stream)
+    has_mp3_frame = len(audio_bytes) > 1 and audio_bytes[0] == 0xFF and audio_bytes[1] & 0xE0 == 0xE0
+    if not audio_bytes.startswith(b"ID3") and not has_mp3_frame:
+        raise RuntimeError("ElevenLabs returned invalid MP3 audio")
+    return audio_bytes
 
 @app.get("/api/voice-tts")
-async def voice_tts(text: str = Query(..., min_length=1), lang: str = Query("fr"), emotion: str = Query("neutral")):
-    """
-    STRICTLY Pure Google Gemini 3.8 Flash TTS (AI Male Voice: Algieba).
-    All legacy/cheap TTS engines completely purged.
-    """
+def voice_tts(text: str = Query(..., min_length=1), lang: str = Query("fr"), emotion: str = Query("neutral")):
+    """Use ElevenLabs speech with a persistent local audio cache."""
     clean_text = text.strip()[:400]
-    
-    # Check if this exact text is already generated by Google Gemini TTS in local SQLite cache
-    cached_audio = get_cached_audio(clean_text, voice_tag="gemini_algieba")
-    if cached_audio:
-        return Response(content=cached_audio[0], media_type=cached_audio[1])
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ElevenLabs TTS is not configured")
+    cached = get_cached_audio(clean_text, voice_tag=ELEVENLABS_VOICE_TAG)
+    if cached:
+        return Response(content=cached[0], media_type=cached[1])
 
     try:
-        audio_bytes = call_google_gemini_tts(clean_text)
-        save_cached_audio(clean_text, audio_bytes, "audio/wav", voice_tag="gemini_algieba")
-        return Response(content=audio_bytes, media_type="audio/wav")
+        audio_bytes = call_elevenlabs_tts(clean_text, lang)
+        save_cached_audio(clean_text, audio_bytes, "audio/mpeg", voice_tag=ELEVENLABS_VOICE_TAG)
+        return Response(content=audio_bytes, media_type="audio/mpeg")
     except Exception as e:
-        print(f"[!] Google Gemini 3.8 Flash TTS error: {e}")
-        raise HTTPException(status_code=500, detail=f"Google Gemini TTS error: {e}")
+        raise HTTPException(status_code=502, detail=f"ElevenLabs speech synthesis failed: {e}")
 
 
 def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
     tasks[task_id]["status"] = "in_progress"
-    file_path = os.path.join(DOWNLOAD_DIR, req.manga_name, req.filename)
     try:
+        if not MangaYOLOModel.get_instance().interpreter:
+            raise RuntimeError("Детектор пузырей не загружен. Установите зависимости из requirements.txt.")
+        file_path = chapter_path(req.manga_name, req.filename)
         with zipfile.ZipFile(file_path, "r") as zf:
-            pages = sorted([n for n in zf.namelist() if not n.startswith("__MACOSX") and "." in n])
+            pages = image_entries(zf)
         
         total_p = len(pages)
         end_p = min(total_p, req.end_page) if req.end_page is not None else total_p
@@ -328,35 +307,48 @@ def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
             tasks[task_id]["message"] = f"Страница {idx+1}/{end_p}: Распознавание и перевод..."
             
             # 1. Translate bubbles on this page
-            page_bubbles = MangaTranslatorService.batch_translate_page(
-                cbz_path=file_path,
-                manga_name=req.manga_name,
-                filename=req.filename,
-                page_idx=idx
+            page_bubbles = get_cached_page_bubbles(req.manga_name, req.filename, idx)
+            page_ready = is_page_fully_translated(req.manga_name, req.filename, idx)
+            voice_tag = ELEVENLABS_VOICE_TAG
+            audio_ready = bool(page_bubbles) and all(
+                not (bubble.get("translation") or {}).get("original", "").strip()
+                or get_cached_audio((bubble.get("translation") or {}).get("original", ""), voice_tag=voice_tag)
+                for bubble in page_bubbles
             )
+            if page_ready and audio_ready:
+                tasks[task_id]["completed_pages"] += 1
+                continue
+            if not page_ready:
+                page_bubbles = MangaTranslatorService.batch_translate_page(
+                    cbz_path=file_path,
+                    manga_name=req.manga_name,
+                    filename=req.filename,
+                    page_idx=idx
+                )
+            page_bubbles = page_bubbles or []
 
-            # 2. Pre-generate and cache ONLY Google Gemini 3.8 Flash TTS audio in background
+            # 2. Pre-generate available French speech once; future plays use SQLite cache.
             for b in page_bubbles:
                 tr = b.get("translation") or {}
                 orig_text = tr.get("original", "").strip()
                 if orig_text and len(orig_text) > 1:
-                    if not get_cached_audio(orig_text, voice_tag="gemini_algieba"):
+                    voice_tag = ELEVENLABS_VOICE_TAG
+                    if ELEVENLABS_API_KEY and not get_cached_audio(orig_text, voice_tag=voice_tag):
                         try:
-                            # Direct Google Gemini 3.8 Flash TTS generation
-                            audio_bytes = call_google_gemini_tts(orig_text)
-                            save_cached_audio(orig_text, audio_bytes, "audio/wav", voice_tag="gemini_algieba")
-                            time.sleep(0.5) # respectful pace for Gemini free tier rate limits
+                            audio_bytes = call_elevenlabs_tts(orig_text)
+                            save_cached_audio(orig_text, audio_bytes, "audio/mpeg", voice_tag=voice_tag)
                         except Exception as e:
-                            print(f"[!] Background Gemini TTS skipped for '{orig_text[:20]}': {e}")
+                            print(f"[!] ElevenLabs speech cache skipped: {type(e).__name__}")
 
             tasks[task_id]["completed_pages"] += 1
             time.sleep(0.35)
 
         tasks[task_id]["status"] = "completed"
-        tasks[task_id]["message"] = f"Все {end_p - start_p} страниц переведены и озвучены через Google Gemini 3.8 Flash TTS!"
+        tasks[task_id]["message"] = f"Обработано {end_p - start_p} страниц. Позиции, переводы и доступная озвучка сохранены локально."
     except Exception as e:
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = str(e)
+        tasks[task_id]["message"] = f"Ошибка: {e}"
 
 
 @app.post("/api/batch-translate-chapter")
@@ -364,9 +356,16 @@ def batch_translate_chapter(req: BatchTranslateChapterRequest, background_tasks:
     """
     Pre-translates an entire chapter in the background, saving all bubbles and Russian overlays into SQLite.
     """
+    for existing in tasks.values():
+        if (existing.get("kind") == "batch_translate"
+                and existing.get("manga_name") == req.manga_name
+                and existing.get("filename") == req.filename
+                and existing.get("status") in {"pending", "in_progress"}):
+            return {"task_id": existing["id"], "reused": True}
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
         "id": task_id,
+        "kind": "batch_translate",
         "manga_name": req.manga_name,
         "filename": req.filename,
         "status": "pending",
@@ -380,7 +379,7 @@ def batch_translate_chapter(req: BatchTranslateChapterRequest, background_tasks:
 
 @app.get("/download-file/{manga_name}/{filename}")
 def download_cbz(manga_name: str, filename: str):
-    file_path = os.path.join(DOWNLOAD_DIR, manga_name, filename)
+    file_path = chapter_path(manga_name, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -396,6 +395,12 @@ def download_cbz(manga_name: str, filename: str):
 
 def bg_download_task(task_id: str, req: DownloadRequest):
     slug = req.url_or_slug.strip().split("/")[-1]
+    if not re.fullmatch(r"[a-z0-9-]+", slug, re.I):
+        tasks[task_id].update(status="failed", message="Укажите корректный slug манги.")
+        return
+    if req.from_chapter is not None and req.to_chapter is not None and req.from_chapter > req.to_chapter:
+        tasks[task_id].update(status="failed", message="Начальная глава больше конечной.")
+        return
     out_dir = os.path.join(DOWNLOAD_DIR, slug.replace("-", "_").title())
     os.makedirs(out_dir, exist_ok=True)
 
@@ -415,13 +420,35 @@ def bg_download_task(task_id: str, req: DownloadRequest):
                 continue
             if req.to_chapter is not None and num > req.to_chapter:
                 continue
-            targets.append(ch)
+            ch_num = ch["number"]
+            ch_filename = f"{manga_title} - Ch.{ch_num.zfill(2) if ch_num.isdigit() else ch_num}.cbz"
+            local_path = os.path.join(out_dir, ch_filename)
+            already_downloaded = False
+            if os.path.isfile(local_path) and os.path.getsize(local_path) > 10000:
+                try:
+                    with zipfile.ZipFile(local_path) as existing_archive:
+                        already_downloaded = bool(image_entries(existing_archive))
+                except zipfile.BadZipFile:
+                    already_downloaded = False
+            if already_downloaded:
+                tasks[task_id]["completed_chapters"] = tasks[task_id].get("completed_chapters", 0) + 1
+            else:
+                targets.append(ch)
 
-        tasks[task_id]["total_chapters"] = len(targets)
-        tasks[task_id]["completed_chapters"] = 0
+        already_count = tasks[task_id].get("completed_chapters", 0)
+        tasks[task_id]["total_chapters"] = len(targets) + already_count
+        tasks[task_id]["completed_chapters"] = already_count
+        if already_count:
+            tasks[task_id]["message"] = f"Найдено локально глав: {already_count}. Проверяю, чего не хватает…"
+        if not targets:
+            if already_count:
+                tasks[task_id]["status"] = "completed"
+                tasks[task_id]["message"] = f"Все {already_count} глав уже находятся локально."
+                return
+            raise ValueError("В выбранном диапазоне главы не найдены.")
 
         for idx, ch in enumerate(targets):
-            tasks[task_id]["message"] = f"Скачивание главы {ch['number']} ({idx+1}/{len(targets)})"
+            tasks[task_id]["message"] = f"Скачивание главы {ch['number']} ({already_count + idx + 1}/{tasks[task_id]['total_chapters']})"
             client.download_chapter(
                 chapter_info=ch,
                 output_dir=out_dir,
@@ -441,9 +468,16 @@ def bg_download_task(task_id: str, req: DownloadRequest):
 
 @app.post("/api/download-task")
 def trigger_download(req: DownloadRequest, background_tasks: BackgroundTasks):
+    requested_slug = req.url_or_slug.strip().rstrip("/").split("/")[-1].split("?")[0]
+    for existing in tasks.values():
+        if (existing.get("kind") == "download" and existing.get("slug") == requested_slug
+                and existing.get("status") in {"pending", "in_progress"}):
+            return {"task_id": existing["id"], "reused": True}
     task_id = str(uuid.uuid4())
     tasks[task_id] = {
         "id": task_id,
+        "kind": "download",
+        "slug": requested_slug,
         "status": "pending",
         "message": "В очереди...",
         "total_chapters": 0,

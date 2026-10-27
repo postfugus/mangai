@@ -23,8 +23,9 @@ API и инструмент для скачивания манги с сайта
 ---
 
 ## Запуск REST API
+Для скачивания глав через REST API:
+
 ```bash
-cd /root/mangakawaii-downloader
 PYTHONPATH=. uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
@@ -91,14 +92,29 @@ curl http://localhost:8000/manga/kaze-to-ki-no-uta/chapter/1/pages
 
 ---
 
+## Первичная настройка веб-ридера
+
+Установите зависимости и один раз загрузите локальные модели распознавания французского текста и перевода:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python setup_local_models.py
+./start_server.sh
+```
+
+Для локальной OCR-обработки также нужен системный `tesseract`. Французская озвучка работает через ElevenLabs; задайте `ELEVENLABS_API_KEY` в `.env`. Полученное MP3-аудио сохраняется в `translations_cache.db` и повторно используется локально.
+
+Модели хранятся в `.local_models/`, а главы, переводы, координаты пузырей и аудио — в локальных CBZ-файлах и `translations_cache.db`. Ключ Groq используется для облачного перевода (при отсутствии доступен локальный перевод); ElevenLabs API нужен для озвучки. При повторной загрузке уже имеющиеся главы пропускаются, а страницы с сохранёнными переводами и озвучкой не обрабатываются заново.
+
 ## Запуск через CLI
 
 Выкачать все части манги:
 ```bash
-PYTHONPATH=/root/mangakawaii-downloader python3 /root/mangakawaii-downloader/cli.py --slug kaze-to-ki-no-uta --output /root/manga_downloads/Kaze_to_Ki_no_Uta
+PYTHONPATH=. python3 cli.py --slug kaze-to-ki-no-uta --output ./downloads/Kaze_to_Ki_No_Uta
 ```
 
 Выкачать диапазон глав (например, с 1 по 10):
 ```bash
-PYTHONPATH=/root/mangakawaii-downloader python3 /root/mangakawaii-downloader/cli.py --slug kaze-to-ki-no-uta --start 1 --end 10
+PYTHONPATH=. python3 cli.py --slug kaze-to-ki-no-uta --start 1 --end 10
 ```

@@ -2,7 +2,7 @@
 <html lang="ru" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ manga_name }} · {{ filename }}</title>
   
   <!-- Tailwind CSS & DaisyUI via CDN -->
@@ -96,6 +96,14 @@
       transform: scale(0.98);
     }
 
+    #ttsAudio {
+      position: fixed;
+      z-index: 80;
+      right: 12px;
+      bottom: 78px;
+      width: min(320px, calc(100vw - 24px));
+    }
+
     .in-bubble-text {
       width: 100%;
       max-height: 100%;
@@ -152,7 +160,8 @@
     #compactDetailsModal {
       position: fixed;
       bottom: 0;
-      inset-x: 0;
+      left: 0;
+      right: 0;
       z-index: 70;
       background: rgba(15, 23, 42, 0.96);
       backdrop-filter: blur(16px);
@@ -207,12 +216,6 @@
 
     <!-- Right Controls -->
     <div class="flex items-center gap-1.5">
-      <!-- Ambient Background Preload Indicator -->
-      <div id="ambientProgress" class="hidden items-center gap-1.5 bg-base-200/90 border border-secondary/30 px-2.5 py-1 rounded-full shadow-sm text-[11px] font-bold text-secondary">
-        <span class="loading loading-spinner loading-xs text-secondary"></span>
-        <span id="ambientProgressText">Фон: 0%</span>
-      </div>
-
       <div class="badge badge-primary badge-outline text-[11px] font-bold gap-1 py-2.5 hidden sm:inline-flex">
         <i class="fa-solid fa-microphone-lines"></i>
         <span>Мужской ИИ-голос</span>
@@ -368,7 +371,7 @@
     </div>
   </dialog>
 
-  <audio id="ttsAudio" class="hidden"></audio>
+  <audio id="ttsAudio" controls preload="none" style="display:none"></audio>
 
   <script>
     const MANGA_NAME = "{{ manga_name }}";
@@ -383,65 +386,13 @@
     let barsVisible = true;
     let activeAudioText = '';
     let activeAudioEmotion = 'neutral';
-    let ambientBatchStarted = false;
-
+    let activeAudioObjectUrl = '';
+    let audioRequestId = 0;
+    let overlayLoadId = 0;
     document.addEventListener('DOMContentLoaded', () => {
       document.documentElement.setAttribute('data-theme', localStorage.getItem('mk-theme') || 'dark');
       initReader();
-      // Auto-trigger seamless background pre-caching after reader opens
-      setTimeout(startAmbientBackgroundPreload, 2500);
     });
-
-    async function startAmbientBackgroundPreload() {
-      if (ambientBatchStarted) return;
-      ambientBatchStarted = true;
-
-      const progressEl = document.getElementById('ambientProgress');
-      const progressTxt = document.getElementById('ambientProgressText');
-
-      try {
-        const resp = await fetch('/api/batch-translate-chapter', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            manga_name: MANGA_NAME,
-            filename: FILENAME,
-            start_page: 0
-          })
-        });
-        const { task_id } = await resp.json();
-        if (!task_id) return;
-
-        progressEl.classList.remove('hidden');
-        progressEl.classList.add('flex');
-
-        const pollTimer = setInterval(async () => {
-          try {
-            const tResp = await fetch('/api/task/' + task_id);
-            const task = await tResp.json();
-            const pct = task.total_pages > 0 ? Math.round((task.completed_pages / task.total_pages) * 100) : 0;
-            progressTxt.innerText = `Фон: ${pct}%`;
-
-            if (task.status === 'completed' || task.status === 'failed') {
-              clearInterval(pollTimer);
-              if (task.status === 'completed') {
-                progressTxt.innerText = 'Кэш 100%';
-                setTimeout(() => progressEl.classList.add('hidden'), 3500);
-                loadCachedReplacements(currentPageIdx);
-              } else {
-                progressEl.classList.add('hidden');
-              }
-            }
-          } catch (e) {
-            clearInterval(pollTimer);
-            progressEl.classList.add('hidden');
-          }
-        }, 2000);
-
-      } catch (err) {
-        console.log('Ambient preload notice:', err);
-      }
-    }
 
     function initReader() {
       const slider = document.getElementById('pageSlider');
@@ -459,8 +410,6 @@
       currentPageIdx = idx;
       
       const img = document.getElementById('currentImage');
-      img.src = `/page-image/${MANGA_NAME}/${FILENAME}/${idx}`;
-      
       document.getElementById('pageSlider').value = idx;
       document.getElementById('pageCounter').innerText = `${idx + 1} / ${PAGES_LIST.length}`;
       
@@ -468,10 +417,7 @@
       img.onload = () => {
         loadCachedReplacements(idx);
       };
-      // In case image was already cached/loaded
-      if (img.complete && img.naturalWidth > 0) {
-        loadCachedReplacements(idx);
-      }
+      img.src = `/page-image/${MANGA_NAME}/${FILENAME}/${idx}`;
       closeDetailsModal();
       
       window.scrollTo({ top: 0, behavior: 'instant' });
@@ -678,12 +624,15 @@
     // ==================== IN-BUBBLE TEXT REPLACEMENT ====================
 
     async function loadCachedReplacements(pageIdx) {
+      const requestId = ++overlayLoadId;
       const layer = document.getElementById('replacementsLayer');
       layer.innerHTML = '';
 
       try {
         const resp = await fetch(`/api/page-overlays/${MANGA_NAME}/${FILENAME}/${pageIdx}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const items = await resp.json();
+        if (requestId !== overlayLoadId || pageIdx !== currentPageIdx) return;
         
         items.forEach(item => {
           if (!item.box || !item.natural) return;
@@ -703,6 +652,7 @@
       const el = document.createElement('div');
       el.className = 'in-bubble-replacement';
       el.setAttribute('data-box-key', `${box.x}_${box.y}`);
+      el.title = 'Нажмите один раз, чтобы озвучить; дважды — чтобы убрать перевод';
       
       // Store original detected bubble dimensions as baseline anchor
       el.dataset.origX = box.x;
@@ -721,30 +671,20 @@
       textSpan.innerText = data.natural || data.translated || '';
       el.appendChild(textSpan);
 
-      // Single Click vs Double Click handling
-      let clickTimeout = null;
-      let lastTapTime = 0;
-
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        const currentTime = new Date().getTime();
-        const tapLength = currentTime - lastTapTime;
-
-        if (tapLength < 320 && tapLength > 0) {
-          // Double click detected: CLOSE / REMOVE translation overlay
-          clearTimeout(clickTimeout);
-          clickTimeout = null;
-          el.remove();
-          return;
+        // Start playback in the click event itself so browsers accept it as
+        // a user gesture. Delaying for double-click detection blocks autoplay.
+        if (e.detail === 1 && data.original) {
+          playVoiceTTS(data.original, data.emotion || 'neutral');
         }
+      });
 
-        lastTapTime = currentTime;
-        clickTimeout = setTimeout(() => {
-          // Single Click: Re-play Neural Male Voice with Contextual Emotion
-          if (data.original) {
-            playVoiceTTS(data.original, data.emotion || 'neutral');
-          }
-        }, 320);
+      el.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeAudioText === data.original) stopVoiceTTS();
+        el.remove();
       });
 
       // Long-press or right-click: Open deep details
@@ -765,7 +705,7 @@
     async function replaceAllBubblesWithRussian() {
       const bubbles = await (await fetch(`/api/detect-bubbles/${MANGA_NAME}/${FILENAME}/${currentPageIdx}`)).json();
       for (const b of bubbles) {
-        handleBubbleAction(b.box, false);
+        handleBubbleAction(b.box);
       }
     }
 
@@ -774,6 +714,10 @@
     async function detectAndShowBubbles() {
       try {
         const resp = await fetch(`/api/detect-bubbles/${MANGA_NAME}/${FILENAME}/${currentPageIdx}`);
+        if (!resp.ok) {
+          const error = await resp.json();
+          throw new Error(error.detail || 'Не удалось найти баблы');
+        }
         const bubbles = await resp.json();
         
         const layer = document.getElementById('bubblesLayer');
@@ -789,10 +733,11 @@
 
           zone.onclick = (e) => {
             e.stopPropagation();
-            handleBubbleAction(b.box, true);
+            handleBubbleAction(b.box);
           };
           layer.appendChild(zone);
         });
+        if (!bubbles.length) alert('На этой странице баблы не распознаны. Можно выделить область вручную.');
       } catch (err) {
         alert('Ошибка детекции: ' + err);
       }
@@ -803,7 +748,7 @@
       document.getElementById('selectionBox').style.display = 'none';
     }
 
-    async function handleBubbleAction(box, autoPlay = true) {
+    async function handleBubbleAction(box) {
       const layer = document.getElementById('replacementsLayer');
       const tempLoading = document.createElement('div');
       tempLoading.className = 'in-bubble-replacement text-primary';
@@ -825,19 +770,25 @@
             box: box
           })
         });
+        if (!resp.ok) {
+          const error = await resp.json();
+          throw new Error(error.detail || 'Перевод не получен');
+        }
         const data = await resp.json();
         tempLoading.remove();
+        if (!data.natural && !data.translated) {
+          throw new Error(data.translation_error || 'Перевод для этой области не найден.');
+        }
         
         renderInBubbleCard(box, data);
 
-        // Immediate Neural Male Voice Playback with Contextual Emotion!
-        if (autoPlay && data.original) {
-          playVoiceTTS(data.original, data.emotion || 'neutral');
-        }
+        // Speech playback is bound to a direct click on the rendered bubble.
+        // Starting it after this network request is commonly blocked by browsers.
 
       } catch (err) {
         tempLoading.remove();
         console.error('Translation error:', err);
+        alert(String(err.message || err));
       }
     }
 
@@ -845,6 +796,7 @@
 
     function openDetailsModal(data) {
       activeAudioText = data.original || '';
+      activeAudioEmotion = data.emotion || 'neutral';
       document.getElementById('dockOrig').innerText = data.original || '';
       document.getElementById('dockIpa').innerText = data.ipa || '';
       document.getElementById('dockLiteral').innerText = data.literal ? `Дословно: ${data.literal}` : '';
@@ -950,7 +902,7 @@
         const hPct = (bRect.height / rect.height) * 100;
 
         if (wPct > 3 && hPct > 2) {
-          handleBubbleAction({ x: xPct, y: yPct, w: wPct, h: hPct }, true);
+          handleBubbleAction({ x: xPct, y: yPct, w: wPct, h: hPct });
         }
       }
 
@@ -965,12 +917,51 @@
 
     // ==================== NEURAL AI VOICE (MALE) WITH CONTEXT ====================
 
-    function playVoiceTTS(text, emotion = 'neutral') {
+    async function playVoiceTTS(text, emotion = 'neutral') {
       if (!text) return;
+      const requestId = ++audioRequestId;
       activeAudioText = text;
       const audio = document.getElementById('ttsAudio');
-      audio.src = `/api/voice-tts?lang=fr&text=${encodeURIComponent(text)}&emotion=${encodeURIComponent(emotion)}`;
-      audio.play().catch(e => console.log('Audio error:', e));
+      audio.pause();
+      const previousUrl = activeAudioObjectUrl;
+      activeAudioObjectUrl = '';
+      if (previousUrl) URL.revokeObjectURL(previousUrl);
+      try {
+        const response = await fetch(`/api/voice-tts?lang=fr&text=${encodeURIComponent(text)}&emotion=${encodeURIComponent(emotion)}`);
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.detail || `Ошибка озвучки (${response.status})`);
+        }
+        const audioBlob = await response.blob();
+        if (requestId !== audioRequestId) return;
+        activeAudioObjectUrl = URL.createObjectURL(audioBlob);
+        audio.controls = true;
+        audio.style.display = 'block';
+        audio.src = activeAudioObjectUrl;
+        audio.load();
+        try {
+          await audio.play();
+        } catch (e) {
+          // Fetch completes after the click activation expires on some browsers.
+          // Keep native player controls available for a direct tap on Play.
+          alert(`Аудио готово, но браузер заблокировал автозапуск (${e.name || 'ошибка'}). Нажмите ▶ на плеере внизу экрана.`);
+        }
+      } catch (e) {
+        if (requestId !== audioRequestId) return;
+        console.error('Audio playback failed:', e);
+        alert(e.message || 'Не удалось получить озвучку ElevenLabs.');
+      }
+    }
+
+    function stopVoiceTTS() {
+      audioRequestId++;
+      const audio = document.getElementById('ttsAudio');
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      if (activeAudioObjectUrl) URL.revokeObjectURL(activeAudioObjectUrl);
+      activeAudioObjectUrl = '';
+      activeAudioText = '';
     }
 
     function playActiveAudio() {
@@ -1004,24 +995,36 @@
             start_page: 0
           })
         });
+        if (!resp.ok) throw new Error((await resp.json()).detail || 'Не удалось начать обработку главы');
         const { task_id } = await resp.json();
 
         const timer = setInterval(async () => {
-          const tResp = await fetch('/api/task/' + task_id);
-          const task = await tResp.json();
-          stText.innerText = task.message || task.status;
-          const pct = task.total_pages > 0 ? Math.round((task.completed_pages / task.total_pages) * 100) : 0;
-          pBar.value = pct;
-          pPct.innerText = pct + '%';
+          try {
+            const tResp = await fetch('/api/task/' + task_id);
+            if (!tResp.ok) throw new Error('Не удалось получить состояние обработки');
+            const task = await tResp.json();
+            stText.innerText = task.message || task.status;
+            const pct = task.total_pages > 0 ? Math.round((task.completed_pages / task.total_pages) * 100) : 0;
+            pBar.value = pct;
+            pPct.innerText = pct + '%';
 
-          if (task.status === 'completed' || task.status === 'failed') {
+            if (task.status === 'completed' || task.status === 'failed') {
+              clearInterval(timer);
+              btn.disabled = false;
+              btn.innerHTML = '<i class="fa-solid fa-play"></i> Запустить';
+              if (task.status === 'completed') {
+                loadCachedReplacements(currentPageIdx);
+                setTimeout(() => document.getElementById('batchModal').close(), 1200);
+              } else {
+                alert(task.message || 'Не удалось завершить обработку главы.');
+              }
+            }
+          } catch (err) {
             clearInterval(timer);
             btn.disabled = false;
             btn.innerHTML = '<i class="fa-solid fa-play"></i> Запустить';
-            if (task.status === 'completed') {
-              loadCachedReplacements(currentPageIdx);
-              setTimeout(() => document.getElementById('batchModal').close(), 1200);
-            }
+            stText.innerText = 'Состояние обработки недоступно';
+            alert('Не удалось проверить обработку: ' + err.message);
           }
         }, 1500);
       } catch (err) {

@@ -2,7 +2,7 @@
 <html lang="ru" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Manga Cloud & Reader</title>
   
   <!-- Tailwind CSS & DaisyUI via CDN -->
@@ -78,7 +78,7 @@
         <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-base-content/40">
           <i class="fa-solid fa-magnifying-glass"></i>
         </span>
-        <input type="text" id="searchInput" onkeyup="filterChapters()" placeholder="Быстрый поиск главы (например: Ch. 01, Kaze...)" class="input input-bordered w-full pl-11 bg-base-100 shadow-sm focus:input-primary rounded-2xl" />
+        <input type="search" id="searchInput" oninput="filterChapters()" placeholder="Поиск манги или главы (например: Kaze, Ch. 01)" class="input input-bordered w-full pl-11 bg-base-100 shadow-sm focus:input-primary rounded-2xl" />
       </div>
     </div>
 
@@ -182,11 +182,11 @@
         <div class="grid grid-cols-2 gap-3">
           <div class="form-control">
             <label class="label"><span class="label-text font-bold">С главы</span></label>
-            <input type="number" step="any" id="fromChapter" placeholder="1" class="input input-bordered focus:input-primary rounded-xl" />
+            <input type="number" min="0" step="any" id="fromChapter" placeholder="1" class="input input-bordered focus:input-primary rounded-xl" />
           </div>
           <div class="form-control">
             <label class="label"><span class="label-text font-bold">По главу</span></label>
-            <input type="number" step="any" id="toChapter" placeholder="39" class="input input-bordered focus:input-primary rounded-xl" />
+            <input type="number" min="0" step="any" id="toChapter" placeholder="39" class="input input-bordered focus:input-primary rounded-xl" />
           </div>
         </div>
 
@@ -212,18 +212,22 @@
       document.documentElement.setAttribute('data-theme', theme);
       localStorage.setItem('mk-theme', theme);
     }
-    const savedTheme = localStorage.getItem('mk-theme') || 'dark';
+    const allowedThemes = new Set(['dark', 'night', 'forest', 'luxury', 'synthwave']);
+    const requestedTheme = localStorage.getItem('mk-theme');
+    const savedTheme = allowedThemes.has(requestedTheme) ? requestedTheme : 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
 
     function filterChapters() {
-      const q = document.getElementById('searchInput').value.toLowerCase();
-      document.querySelectorAll('.chapter-item').forEach(el => {
-        const text = el.getAttribute('data-title');
-        el.style.display = text.includes(q) ? 'flex' : 'none';
-      });
+      const q = document.getElementById('searchInput').value.trim().toLocaleLowerCase('ru');
       document.querySelectorAll('.manga-card').forEach(card => {
-        const visible = card.querySelectorAll('.chapter-item[style="display: flex;"]').length > 0 || q === '';
-        card.style.display = visible ? 'block' : 'none';
+        const mangaMatches = card.dataset.group.includes(q);
+        let matchingChapters = 0;
+        card.querySelectorAll('.chapter-item').forEach(el => {
+          const matches = !q || mangaMatches || el.dataset.title.includes(q);
+          el.style.display = matches ? 'flex' : 'none';
+          if (matches) matchingChapters++;
+        });
+        card.style.display = matchingChapters === 0 ? 'none' : '';
       });
     }
 
@@ -233,6 +237,15 @@
       const fromCh = document.getElementById('fromChapter').value;
       const toCh = document.getElementById('toChapter').value;
       const slug = slugVal.replace(/^https?:\/\/[^\/]+\/manga\//, '').replace(/\/.*$/, '');
+
+      if (!slug || slug.includes('?') || slug.includes('#')) {
+        alert('Укажите корректный slug или ссылку на мангу.');
+        return;
+      }
+      if (fromCh && toCh && Number(fromCh) > Number(toCh)) {
+        alert('Номер главы «С» не может быть больше номера «По».');
+        return;
+      }
 
       const submitBtn = document.getElementById('submitBtn');
       submitBtn.disabled = true;
@@ -254,26 +267,38 @@
             to_chapter: toCh ? parseFloat(toCh) : null
           })
         });
+        if (!resp.ok) throw new Error((await resp.json()).detail || 'Не удалось запустить загрузку');
         const data = await resp.json();
         const taskId = data.task_id;
 
         const timer = setInterval(async () => {
-          const sResp = await fetch('/api/task/' + taskId);
-          const task = await sResp.json();
-          pText.innerText = task.message || task.status;
-          const pct = task.total_chapters > 0 
-            ? Math.round((task.completed_chapters / task.total_chapters) * 100) 
-            : 0;
-          pPct.innerText = pct + '%';
-          pBar.value = pct;
+          try {
+            const sResp = await fetch('/api/task/' + taskId);
+            if (!sResp.ok) throw new Error('Не удалось получить статус загрузки');
+            const task = await sResp.json();
+            pText.innerText = task.message || task.status;
+            const pct = task.total_chapters > 0
+              ? Math.round((task.completed_chapters / task.total_chapters) * 100)
+              : 0;
+            pPct.innerText = pct + '%';
+            pBar.value = pct;
 
-          if (task.status === 'completed' || task.status === 'failed') {
+            if (task.status === 'completed' || task.status === 'failed') {
+              clearInterval(timer);
+              submitBtn.disabled = false;
+              submitBtn.innerHTML = '<i class="fa-solid fa-download mr-1"></i> Начать загрузку';
+              if (task.status === 'completed') {
+                setTimeout(() => location.reload(), 1200);
+              } else {
+                alert(task.message || 'Загрузка завершилась с ошибкой.');
+              }
+            }
+          } catch (err) {
             clearInterval(timer);
             submitBtn.disabled = false;
             submitBtn.innerHTML = '<i class="fa-solid fa-download mr-1"></i> Начать загрузку';
-            if (task.status === 'completed') {
-              setTimeout(() => location.reload(), 1200);
-            }
+            pText.innerText = 'Состояние загрузки недоступно';
+            alert('Не удалось проверить загрузку: ' + err.message);
           }
         }, 1500);
 
