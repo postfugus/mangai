@@ -782,8 +782,10 @@
         
         renderInBubbleCard(box, data);
 
-        // Speech playback is bound to a direct click on the rendered bubble.
-        // Starting it after this network request is commonly blocked by browsers.
+        // Immediate Deepgram Hector Speech Playback on bubble detection/tap!
+        if (data.original) {
+          playVoiceTTS(data.original, data.emotion || 'neutral');
+        }
 
       } catch (err) {
         tempLoading.remove();
@@ -915,52 +917,38 @@
       window.addEventListener('touchend', onEnd);
     }
 
-    // ==================== NEURAL AI VOICE (MALE) WITH CONTEXT ====================
+    // ==================== DEEPGRAM AURA-2 MALE TTS (HECTOR) ====================
 
-    async function playVoiceTTS(text, emotion = 'neutral') {
+    function playVoiceTTS(text, emotion = 'neutral') {
       if (!text) return;
-      const requestId = ++audioRequestId;
       activeAudioText = text;
+      activeAudioEmotion = emotion;
       const audio = document.getElementById('ttsAudio');
-      audio.pause();
-      const previousUrl = activeAudioObjectUrl;
-      activeAudioObjectUrl = '';
-      if (previousUrl) URL.revokeObjectURL(previousUrl);
-      try {
-        const response = await fetch(`/api/voice-tts?lang=fr&text=${encodeURIComponent(text)}&emotion=${encodeURIComponent(emotion)}`);
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.detail || `Ошибка озвучки (${response.status})`);
-        }
-        const audioBlob = await response.blob();
-        if (requestId !== audioRequestId) return;
-        activeAudioObjectUrl = URL.createObjectURL(audioBlob);
-        audio.controls = true;
-        audio.style.display = 'block';
-        audio.src = activeAudioObjectUrl;
-        audio.load();
-        try {
-          await audio.play();
-        } catch (e) {
-          // Fetch completes after the click activation expires on some browsers.
-          // Keep native player controls available for a direct tap on Play.
-          alert(`Аудио готово, но браузер заблокировал автозапуск (${e.name || 'ошибка'}). Нажмите ▶ на плеере внизу экрана.`);
-        }
-      } catch (e) {
-        if (requestId !== audioRequestId) return;
-        console.error('Audio playback failed:', e);
-        alert(e.message || 'Не удалось получить озвучку ElevenLabs.');
+      
+      const audioUrl = `/api/voice-tts?lang=fr&text=${encodeURIComponent(text)}&emotion=${encodeURIComponent(emotion)}`;
+      audio.src = audioUrl;
+      
+      // Direct user gesture playback - standard in modern mobile and desktop browsers
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          console.log('[TTS] Autoplay notice:', e);
+          // If browser requires explicit interaction, open compact details drawer so user can tap Listen
+          if (e.name === 'NotAllowedError') {
+            const dockOrig = document.getElementById('dockOrig');
+            if (dockOrig && !document.getElementById('compactDetailsModal').classList.contains('open')) {
+              dockOrig.innerText = text;
+              document.getElementById('compactDetailsModal').classList.add('open');
+            }
+          }
+        });
       }
     }
 
     function stopVoiceTTS() {
-      audioRequestId++;
       const audio = document.getElementById('ttsAudio');
       audio.pause();
-      audio.removeAttribute('src');
-      audio.load();
-      if (activeAudioObjectUrl) URL.revokeObjectURL(activeAudioObjectUrl);
-      activeAudioObjectUrl = '';
+      audio.currentTime = 0;
       activeAudioText = '';
     }
 
