@@ -5,9 +5,10 @@ import json
 import mimetypes
 import re
 import zipfile
+import urllib.request
+import urllib.error
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
-from elevenlabs import ElevenLabs
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Query
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -240,50 +241,58 @@ def get_page_overlays(manga_name: str, filename: str, page_idx: int):
     return items
 
 
-# ElevenLabs multilingual TTS (George, male narrative voice)
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")
-ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_v4")
-ELEVENLABS_VOICE_TAG = f"elevenlabs_{ELEVENLABS_MODEL_ID}_{ELEVENLABS_VOICE_ID}_fr"
-_elevenlabs_client = None
+# Deepgram Aura-2 French Male TTS (Hector)
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
+DEEPGRAM_VOICE_MODEL = os.environ.get("DEEPGRAM_VOICE_MODEL", "aura-2-hector-fr")
+DEEPGRAM_VOICE_TAG = f"deepgram_{DEEPGRAM_VOICE_MODEL}"
 
 
-def call_elevenlabs_tts(clean_text: str, language: str = "fr") -> bytes:
-    """Synthesize speech with ElevenLabs and return compressed MP3 bytes."""
-    global _elevenlabs_client
-    if not ELEVENLABS_API_KEY:
-        raise RuntimeError("ELEVENLABS_API_KEY is not configured")
-    if _elevenlabs_client is None:
-        _elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-    audio_stream = _elevenlabs_client.text_to_speech.convert(
-        voice_id=ELEVENLABS_VOICE_ID,
-        text=clean_text,
-        model_id=ELEVENLABS_MODEL_ID,
-        language_code=language if language in {"fr", "en", "ru"} else "fr",
-        output_format="mp3_44100_128",
+def call_deepgram_tts(clean_text: str) -> bytes:
+    """Synthesize speech strictly with Deepgram (aura-2-hector-fr) and return MP3 audio bytes."""
+    if not DEEPGRAM_API_KEY:
+        raise RuntimeError("DEEPGRAM_API_KEY is not configured")
+
+    url = f"https://api.deepgram.com/v1/speak?model={DEEPGRAM_VOICE_MODEL}"
+    payload = json.dumps({"text": clean_text}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Token {DEEPGRAM_API_KEY}",
+            "Content-Type": "application/json"
+        }
     )
-    audio_bytes = b"".join(audio_stream)
-    has_mp3_frame = len(audio_bytes) > 1 and audio_bytes[0] == 0xFF and audio_bytes[1] & 0xE0 == 0xE0
-    if not audio_bytes.startswith(b"ID3") and not has_mp3_frame:
-        raise RuntimeError("ElevenLabs returned invalid MP3 audio")
-    return audio_bytes
+    try:
+        resp = urllib.request.urlopen(req, timeout=12)
+        audio_bytes = resp.read()
+        if len(audio_bytes) < 100:
+            raise RuntimeError("Deepgram returned empty audio response")
+        return audio_bytes
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Deepgram HTTP {e.code}: {err_msg}")
+    except Exception as e:
+        raise RuntimeError(f"Deepgram TTS error: {e}")
+
 
 @app.get("/api/voice-tts")
 def voice_tts(text: str = Query(..., min_length=1), lang: str = Query("fr"), emotion: str = Query("neutral")):
-    """Use ElevenLabs speech with a persistent local audio cache."""
+    """Use Deepgram French male voice (Hector) with persistent SQLite audio cache."""
     clean_text = text.strip()[:400]
-    if not ELEVENLABS_API_KEY:
-        raise HTTPException(status_code=503, detail="ElevenLabs TTS is not configured")
-    cached = get_cached_audio(clean_text, voice_tag=ELEVENLABS_VOICE_TAG)
+    if not DEEPGRAM_API_KEY:
+        raise HTTPException(status_code=503, detail="Deepgram TTS is not configured")
+
+    cached = get_cached_audio(clean_text, voice_tag=DEEPGRAM_VOICE_TAG)
     if cached:
         return Response(content=cached[0], media_type=cached[1])
 
     try:
-        audio_bytes = call_elevenlabs_tts(clean_text, lang)
-        save_cached_audio(clean_text, audio_bytes, "audio/mpeg", voice_tag=ELEVENLABS_VOICE_TAG)
+        audio_bytes = call_deepgram_tts(clean_text)
+        save_cached_audio(clean_text, audio_bytes, "audio/mpeg", voice_tag=DEEPGRAM_VOICE_TAG)
         return Response(content=audio_bytes, media_type="audio/mpeg")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"ElevenLabs speech synthesis failed: {e}")
+        print(f"[!] Deepgram speech error: {e}")
+        raise HTTPException(status_code=502, detail=f"Deepgram speech synthesis failed: {e}")
 
 
 def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
@@ -309,7 +318,7 @@ def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
             # 1. Translate bubbles on this page
             page_bubbles = get_cached_page_bubbles(req.manga_name, req.filename, idx)
             page_ready = is_page_fully_translated(req.manga_name, req.filename, idx)
-            voice_tag = ELEVENLABS_VOICE_TAG
+            voice_tag = DEEPGRAM_VOICE_TAG
             audio_ready = bool(page_bubbles) and all(
                 not (bubble.get("translation") or {}).get("original", "").strip()
                 or get_cached_audio((bubble.get("translation") or {}).get("original", ""), voice_tag=voice_tag)
@@ -327,18 +336,18 @@ def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
                 )
             page_bubbles = page_bubbles or []
 
-            # 2. Pre-generate available French speech once; future plays use SQLite cache.
+            # 2. Pre-generate available French speech once with Deepgram; future plays use SQLite cache.
             for b in page_bubbles:
                 tr = b.get("translation") or {}
                 orig_text = tr.get("original", "").strip()
                 if orig_text and len(orig_text) > 1:
-                    voice_tag = ELEVENLABS_VOICE_TAG
-                    if ELEVENLABS_API_KEY and not get_cached_audio(orig_text, voice_tag=voice_tag):
+                    voice_tag = DEEPGRAM_VOICE_TAG
+                    if DEEPGRAM_API_KEY and not get_cached_audio(orig_text, voice_tag=voice_tag):
                         try:
-                            audio_bytes = call_elevenlabs_tts(orig_text)
+                            audio_bytes = call_deepgram_tts(orig_text)
                             save_cached_audio(orig_text, audio_bytes, "audio/mpeg", voice_tag=voice_tag)
                         except Exception as e:
-                            print(f"[!] ElevenLabs speech cache skipped: {type(e).__name__}")
+                            print(f"[!] Deepgram speech cache skipped for '{orig_text[:20]}': {e}")
 
             tasks[task_id]["completed_pages"] += 1
             time.sleep(0.35)
