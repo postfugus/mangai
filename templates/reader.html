@@ -704,17 +704,28 @@
       if (chapterVoiceoverPreparing) return;
       if (chapterVoiceover?.bubbles?.length) {
         audioReadingItems = chapterVoiceover.bubbles;
+        const audio = document.getElementById('ttsAudio');
+        const isAudioPlaying = audio && !audio.paused && audio.dataset.sourceKind === 'chapter';
+
         if (pendingAudioIndex !== null) {
           audioReadingIndex = pendingAudioIndex < 0 ? audioReadingItems.length - 1 : Math.min(pendingAudioIndex, audioReadingItems.length - 1);
           pendingAudioIndex = null;
-          const destination = audioReadingItems[audioReadingIndex]?.page_idx;
-          if (destination !== undefined && destination !== currentPageIdx) { loadPage(destination); return; }
-        } else {
-          audioReadingIndex = audioReadingItems.findIndex(item => item.page_idx >= currentPageIdx);
-          if (audioReadingIndex < 0) audioReadingIndex = 0;
-          if (audioReadingItems[audioReadingIndex].page_idx !== currentPageIdx) { loadPage(audioReadingItems[audioReadingIndex].page_idx); return; }
+        } else if (!isAudioPlaying) {
+          // Если аудио ещё не играет, стартуем с первой реплики на текущей странице (или первой в главе)
+          const firstOnPage = audioReadingItems.findIndex(item => item.page_idx === currentPageIdx);
+          if (firstOnPage >= 0) {
+            audioReadingIndex = firstOnPage;
+          } else {
+            const nextOnPage = audioReadingItems.findIndex(item => item.page_idx >= currentPageIdx);
+            audioReadingIndex = nextOnPage >= 0 ? nextOnPage : 0;
+            if (audioReadingItems[audioReadingIndex].page_idx !== currentPageIdx) {
+              loadPage(audioReadingItems[audioReadingIndex].page_idx);
+              return;
+            }
+          }
         }
-        showCurrentAudioBubble(true);
+        // Подсвечиваем бабл на странице (если аудио уже играло, не перезапускаем трек с нуля!)
+        showCurrentAudioBubble(!isAudioPlaying);
         return;
       }
       if (!chapterVoiceoverPreparing) prepareChapterVoiceover().then(data => { if (data && audioReadingActive) startAudioPage(); });
@@ -839,7 +850,7 @@
         }
       }
 
-      // Если в паузе между репликами, берём следующий ближайший
+      // Если звук попадает в интервал между репликами, сохраняем текущий или плавно продвигаемся вперед
       if (matchedIdx < 0) {
         for (let i = 0; i < chapterVoiceover.bubbles.length; i++) {
           const seg = segments[chapterVoiceover.bubbles[i].id];
@@ -850,7 +861,12 @@
         }
       }
 
+      // Предотвращаем хаотичный откат назад: в потоковом аудио индекс может только двигаться вперёд
       if (matchedIdx >= 0 && matchedIdx !== audioReadingIndex) {
+        if (matchedIdx < audioReadingIndex && time >= (segments[chapterVoiceover.bubbles[audioReadingIndex]?.id]?.start || 0) - 0.5) {
+          // Игнорируем ложное срабатывание назад, если трек не перематывали вручную
+          return;
+        }
         audioReadingIndex = matchedIdx;
         const targetItem = chapterVoiceover.bubbles[matchedIdx];
         // Если реплика на другой странице — автоматически перелистываем страницу манги!
