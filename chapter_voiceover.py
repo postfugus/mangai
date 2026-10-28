@@ -579,8 +579,14 @@ def _refine_phrase_boundaries(raw_start: float, raw_end: float, next_start: floa
 def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float,
                            rms=None, frame_seconds: Optional[float] = None) -> Dict[str, Dict[str, float]]:
     """Align bubbles to Whisper words, then refine cuts against the actual waveform."""
-    if duration <= 0 or not words:
-        raise RuntimeError("Whisper не распознал речь в аудиоглаве; тайминги не сохранены.")
+    if duration <= 0 or not items:
+        raise RuntimeError("Аудиоглава не содержит звука или диалоговых реплик.")
+
+    # Если Whisper не распознал слова или не установлен, производим прямое
+    # взвешенное выравнивание по огибающей RMS и объёму фраз
+    if not words:
+        words = []
+
     transcript = []
     for word in words:
         tokens = normalize_words(word.get("text", ""))
