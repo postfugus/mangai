@@ -212,7 +212,7 @@ class MangaTranslatorService:
 
         # If natural translation has no Cyrillic or repeats original French, trigger fast LLM correction
         if not has_cyrillic_nat or nat.lower() == orig.lower():
-            corrected = cls.translate_text_with_groq_llm(orig)
+            corrected = cls.translate_text_with_groq(orig)
             if corrected and corrected.get("natural"):
                 nat = corrected["natural"]
                 if not lit and corrected.get("literal"):
@@ -377,6 +377,11 @@ The natural field must be Russian. Do not return French or English there. Do not
 
     @classmethod
     def translate_text_with_groq(cls, text: str) -> Optional[Dict]:
+        """Translate OCR text with Groq and accept only Russian output."""
+        return cls.translate_text_with_groq_llm(text)
+
+    @classmethod
+    def translate_text_with_groq_llm(cls, text: str) -> Optional[Dict]:
         """Translate OCR text with Groq and accept only Russian output."""
         global GROQ_LAST_ERROR
         if not GROQ_API_KEY:
