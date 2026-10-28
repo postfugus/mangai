@@ -12,6 +12,7 @@ import pytesseract
 from pathlib import Path
 
 from db_cache import get_cached_translation, save_cached_translation, get_cached_page_bubbles, save_cached_page_bubbles, delete_cached_translations_for_boxes
+from text_quality import is_russian_translation, is_usable_ocr_text
 
 try:
     import ai_edge_litert.interpreter as litert
@@ -28,6 +29,8 @@ except ImportError:
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "qwen/qwen3.8-27b")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_LAST_ERROR = ""
 LOCAL_MODELS_DIR = Path(__file__).parent / ".local_models"
 TESSDATA_DIR = LOCAL_MODELS_DIR / "tessdata"
 
@@ -223,89 +226,59 @@ class MangaTranslatorService:
 
     @classmethod
     def ocr_and_translate_with_groq_vision(cls, crop_img: Image.Image) -> Optional[Dict]:
-        """
-        Uses Groq Vision (qwen3.8-27b) with advanced linguistic tutoring prompt:
-        - Exact transcript
-        - MFA / IPA phonetic transcription
-        - Word-by-word literal gloss (дословный подстрочник)
-        - Natural literary Russian translation
-        - Vocabulary & grammatical breakdown
-        """
+        """Read a French manga bubble and translate it to Russian with Groq vision."""
         if not GROQ_API_KEY:
             return None
-
         buf = io.BytesIO()
-        crop_img.save(buf, format="JPEG", quality=95)
-        b64_img = base64.b64encode(buf.getvalue()).decode()
-
-        prompt = """You are an elite polyglot tutor optimizing rapid language acquisition through manga reading.
-Analyze this cropped manga speech bubble image in its dramatic context.
-
-Your mission: Make the Russian reader effortlessly assimilate the French grammatical patterns, syntax, and natural reflex.
-
-Output a STRICT JSON object with these exact keys:
-{
-  "original": "exact original speech text without omissions",
-  "ipa": "/MFA phonetic transcription with liaisons and pauses/",
-  "literal": "поморфемный и пословный дословный подстрочник на русском, отражающий структуру французской фразы (например: 'C'est ça' -> 'Это есть это')",
-  "natural": "литературный русский перевод с сохранением точной интонации и характера персонажа",
-  "emotion": "одно слово интонации для озвучки: question, surprise, whisper, excited, calm, anger, sad, neutral",
-  "vocabulary": {
-    "mot": "значение, грамматическая форма, контекст"
-  }
-}
-Output only the JSON object."""
-
+        crop_img.save(buf, format="JPEG", quality=92)
+        prompt = """Read the text in this French manga bubble and translate it into natural Russian.
+Correct obvious OCR mistakes using the visible letters and sentence context. Preserve the speaker's meaning, tone, names, and meaningful numbers. Do not invent a line when the image contains only an unreadable sound effect.
+Return only a JSON object with exactly these keys:
+{"original":"complete French text","natural":"complete Russian translation in Cyrillic"}
+The natural field must be Russian. Do not return French or English there. Do not put OCR debris, isolated punctuation, or meaningless digits in the translation. If the crop is not readable dialogue, return empty strings for both fields."""
+        image_data = base64.b64encode(buf.getvalue()).decode("ascii")
         payload = {
             "model": GROQ_VISION_MODEL,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{b64_img}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}},
+            ]}],
             "temperature": 0.1,
-            "max_tokens": 600
+            "max_tokens": 500,
+            "response_format": {"type": "json_object"},
         }
-
         try:
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json"
-                },
+            response = requests.post(
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
                 json=payload,
-                timeout=12
+                timeout=35,
             )
-            if resp.status_code == 200:
-                raw_json = resp.json()["choices"][0]["message"]["content"]
-                parsed = json.loads(raw_json)
-                return {
-                    "original": parsed.get("original", "").strip(),
-                    "ipa": parsed.get("ipa", "").strip(),
-                    "literal": parsed.get("literal", "").strip(),
-                    "natural": parsed.get("natural", "").strip() or parsed.get("translated", "").strip(),
-                    "translated": parsed.get("natural", "").strip(), # alias for backward compatibility
-                    "emotion": parsed.get("emotion", "neutral").strip().lower(),
-                    "vocabulary": parsed.get("vocabulary", {}),
-                    "provider": f"Groq Vision ({GROQ_VISION_MODEL})"
-                }
-            else:
-                print(f"[!] Groq Vision error: HTTP {resp.status_code} - {resp.text[:200]}")
-        except Exception as e:
-            print(f"[!] Groq Vision exception: {e}")
-
-        return None
+            if not response.ok:
+                global GROQ_LAST_ERROR
+                GROQ_LAST_ERROR = f"Groq API вернул HTTP {response.status_code}. Проверьте GROQ_API_KEY и доступность модели."
+                print(f"[!] Groq Vision error: HTTP {response.status_code}")
+                return None
+            raw = response.json()["choices"][0]["message"]["content"]
+            parsed = json.loads(raw)
+            original = parsed.get("original", "")
+            natural = parsed.get("natural", "")
+            if not isinstance(original, str) or not isinstance(natural, str):
+                return None
+            original, natural = original.strip(), natural.strip()
+            return {
+                "original": original,
+                "ipa": "",
+                "literal": "",
+                "natural": natural,
+                "translated": natural,
+                "emotion": "neutral",
+                "vocabulary": {},
+                "provider": f"Groq ({GROQ_VISION_MODEL})",
+            }
+        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
+            print(f"[!] Groq Vision failed: {type(error).__name__}")
+            return None
 
     @classmethod
     def ocr_and_translate_region(
@@ -319,6 +292,8 @@ Output only the JSON object."""
         target_lang: str = "ru",
         use_cache: bool = True
     ) -> Dict:
+        global GROQ_LAST_ERROR
+        GROQ_LAST_ERROR = ""
         # 1. Check local persistent SQLite cache first!
         if use_cache:
             cached = get_cached_translation(manga_name, filename, page_idx, box)
@@ -339,11 +314,24 @@ Output only the JSON object."""
         else:
             crop = full_img
 
-        # 2. Call Groq Vision
+        # 2. Call Groq vision for OCR and translation.
         result = cls.ocr_and_translate_with_groq_vision(crop)
         
-        # 3. Fallback to Tesseract OCR + Groq Text Translation (openai/gpt-oss-120b)
-        if not result or not result.get("original") or not result.get("natural"):
+        # Reject non-Russian answers and OCR strings dominated by symbols/noise.
+        if result:
+            source = result.get("original", "")
+            translated = result.get("natural", "")
+            if not is_usable_ocr_text(source):
+                result = None
+            elif not is_russian_translation(source, translated):
+                repaired = cls.translate_text_with_groq(source)
+                if repaired and is_russian_translation(source, repaired.get("natural", "")):
+                    result = {**result, **repaired, "provider": f"{result.get('provider', 'Groq Vision')} + validated translation"}
+                else:
+                    result = None
+
+        # Local OCR is the fallback when vision parsing is malformed or untranslated.
+        if not result:
             gray = crop.convert("L")
             enhancer = ImageEnhance.Contrast(gray)
             proc_img = enhancer.enhance(1.8)
@@ -354,24 +342,11 @@ Output only the JSON object."""
                 proc_img = proc_img.resize((int(proc_img.width * scale), int(proc_img.height * scale)), Image.Resampling.LANCZOS)
             raw_text = pytesseract.image_to_string(proc_img, lang=tess_lang, config=tess_config).strip()
             lines = [re.sub(r"[|_\\/]+", " ", line).strip() for line in raw_text.splitlines()]
-            cleaned = " ".join([l for l in lines if len(l) > 1])
+            cleaned = re.sub(r"\s+", " ", " ".join(line for line in lines if len(line) > 1)).strip()
 
-            # Translate through Groq LLM (gpt-oss-120b) to ensure Russian translation is ALWAYS produced
-            translated_result = cls.translate_text_with_groq_llm(cleaned) if cleaned else None
-            if cleaned and not (translated_result and translated_result.get("natural")):
-                offline_ru = OfflineFrenchRussianTranslator.get_instance().translate(cleaned)
-                if offline_ru:
-                    translated_result = {
-                        "original": cleaned,
-                        "ipa": "",
-                        "literal": "",
-                        "natural": offline_ru,
-                        "translated": offline_ru,
-                        "vocabulary": {},
-                        "provider": "Argos Translate (local CPU)",
-                    }
-            
-            if translated_result and translated_result.get("natural"):
+            translated_result = cls.translate_text_with_groq(cleaned) if is_usable_ocr_text(cleaned) else None
+
+            if translated_result and is_russian_translation(cleaned, translated_result.get("natural", "")):
                 result = translated_result
             else:
                 result = {
@@ -381,8 +356,11 @@ Output only the JSON object."""
                     "natural": "",
                     "translated": "",
                     "vocabulary": {},
-                    "provider": "Tesseract OCR (перевод не получен)",
-                    "translation_error": "Не удалось получить русский перевод этого фрагмента.",
+                    "provider": "OCR (перевод не прошёл проверку)",
+                    "translation_error": GROQ_LAST_ERROR or (
+                        "Добавьте GROQ_API_KEY в .env." if not GROQ_API_KEY
+                        else "Groq не вернул корректный русский перевод. Проверьте исходный текст и ответ API."
+                    ),
                 }
 
         # Clean, validate and eliminate nonsensical output
@@ -390,64 +368,69 @@ Output only the JSON object."""
         result["box"] = box
 
         # Save to local SQLite cache only if we have a real Russian translation
-        if result.get("original") and result.get("natural") and result.get("natural") != result.get("original"):
+        if is_usable_ocr_text(result.get("original", "")) and is_russian_translation(
+            result.get("original", ""), result.get("natural", "")
+        ):
             save_cached_translation(manga_name, filename, page_idx, box, result)
 
         return result
 
     @classmethod
-    def translate_text_with_groq_llm(cls, text: str) -> Optional[Dict]:
-        """
-        Translates French OCR text to Russian with grammar and vocab using Groq text models.
-        Uses clean single-line prompt to guarantee 100% robust translation without JSON schema rejects.
-        """
-        if not GROQ_API_KEY or not text.strip():
+    def translate_text_with_groq(cls, text: str) -> Optional[Dict]:
+        """Translate OCR text with Groq and accept only Russian output."""
+        global GROQ_LAST_ERROR
+        if not GROQ_API_KEY:
+            GROQ_LAST_ERROR = "Добавьте GROQ_API_KEY в .env."
             return None
-
+        if not is_usable_ocr_text(text):
+            return None
         prompt = (
-            "You are an expert French-to-Russian translator for manga. "
-            "Given French speech (which may have minor OCR typos), translate it accurately into natural literary Russian. "
-            "Output ONLY the final Russian translation on a single line, nothing else.\n\n"
-            f"French: {text}\nRussian:"
+            "Translate the following French manga dialogue into one complete, natural Russian line. "
+            "Use Cyrillic for Russian words; preserve character names and meaningful numbers. "
+            "Do not answer in French or English, do not give variants or commentary. "
+            "If the text is unreadable OCR noise, return an empty string. "
+            "Respond only as JSON with the key natural.\nFrench: " + text
         )
-
         payload = {
-            "model": "qwen/qwen3.8-27b",
+            "model": GROQ_VISION_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
-            "max_tokens": 150
+            "max_tokens": 300,
+            "response_format": {"type": "json_object"},
         }
-
         try:
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json"
-                },
+            response = requests.post(
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
                 json=payload,
-                timeout=10
+                timeout=30,
             )
-            if resp.status_code == 200:
-                raw_translation = resp.json()["choices"][0]["message"]["content"].strip()
-                # Clean up any surrounding quotes or markdown
-                clean_ru = re.sub(r'^["`\']+|["`\']+$', '', raw_translation).strip()
-                if clean_ru:
-                    return {
-                        "original": text,
-                        "ipa": "",
-                        "literal": clean_ru,
-                        "natural": clean_ru,
-                        "translated": clean_ru,
-                        "vocabulary": {},
-                        "provider": "Groq Fallback (qwen/qwen3.8-27b)"
-                    }
-            else:
-                print(f"[!] Groq LLM translation error: {resp.status_code} - {resp.text[:150]}")
-        except Exception as e:
-            print(f"[!] Groq LLM translation exception: {e}")
-
-        return None
+            if not response.ok:
+                GROQ_LAST_ERROR = f"Groq API вернул HTTP {response.status_code}. Проверьте GROQ_API_KEY и доступность модели."
+                print(f"[!] Groq text translation error: HTTP {response.status_code}")
+                return None
+            raw = response.json()["choices"][0]["message"]["content"]
+            parsed = json.loads(raw)
+            natural = parsed.get("natural", "")
+            if not isinstance(natural, str):
+                return None
+            natural = natural.strip()
+            if not is_russian_translation(text, natural):
+                GROQ_LAST_ERROR = "Groq вернул ответ, который не прошёл проверку русского языка."
+                return None
+            return {
+                "original": text,
+                "ipa": "",
+                "literal": "",
+                "natural": natural,
+                "translated": natural,
+                "vocabulary": {},
+                "provider": f"Groq ({GROQ_VISION_MODEL})",
+            }
+        except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
+            GROQ_LAST_ERROR = f"Ошибка запроса к Groq: {type(error).__name__}."
+            print(f"[!] Groq text translation failed: {type(error).__name__}")
+            return None
 
     @classmethod
     def detect_bubbles(cls, cbz_path: str, manga_name: str, filename: str, page_idx: int) -> List[Dict]:
@@ -507,8 +490,10 @@ Output only the JSON object."""
         
         if enriched:
             fully_translated = all(
-                (b.get("translation") or {}).get("natural")
-                and (b.get("translation") or {}).get("natural") != (b.get("translation") or {}).get("original")
+                is_russian_translation(
+                    (b.get("translation") or {}).get("original", ""),
+                    (b.get("translation") or {}).get("natural", ""),
+                )
                 for b in enriched
             )
             save_cached_page_bubbles(manga_name, filename, page_idx, enriched, is_fully_translated=fully_translated)

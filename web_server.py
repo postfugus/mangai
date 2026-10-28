@@ -5,31 +5,49 @@ import json
 import mimetypes
 import re
 import zipfile
+import hashlib
 import urllib.request
 import urllib.error
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Query
-from fastapi.responses import HTMLResponse, FileResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, Response, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import requests
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 from mangakawaii_scraper import MangaKawaiiClient
+from text_quality import is_russian_translation, is_usable_ocr_text
 from translator_service import MangaTranslatorService, MangaYOLOModel
-from db_cache import get_all_cached_translations_for_page, get_cached_audio, save_cached_audio, clear_offline_cache, init_db, get_cached_page_bubbles, is_page_fully_translated, make_box_key
+from db_cache import (get_all_cached_translations_for_page, init_db, get_cached_page_bubbles,
+                      is_page_fully_translated, make_box_key, get_cached_reading_order,
+                      save_cached_reading_order, get_chapter_text_stats,
+                      get_all_cached_chapter_bubbles, get_cached_chapter_voiceover,
+                      save_cached_chapter_voiceover, get_cached_chapter_voiceover_analysis,
+                      save_cached_chapter_voiceover_analysis, get_staged_chapter_voiceover_audio,
+                      save_staged_chapter_voiceover_audio, delete_staged_chapter_voiceover_audio,
+                      get_cached_chapter_voiceover_tts_chunk,
+                      save_cached_chapter_voiceover_tts_chunk,
+                      delete_cached_chapter_voiceover_tts_chunks, clear_offline_cache)
+from chapter_voiceover import (DEEPGRAM_TTS_MODEL, GEMINI_FRENCH_MALE_VOICE,
+                               GEMINI_TTS_MODEL, analyze_chapter_with_jev, has_pairwise_order_analysis,
+                               chapter_fingerprint, order_chapter_items, synthesize_chapter_gemini,
+                               transcribe_and_align)
 
 app = FastAPI(title="Manga Smart Reader & Cloud Hub")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
-DOWNLOAD_DIR = os.getenv("MANGA_DOWNLOAD_DIR", "/root/manga_downloads")
+DOWNLOAD_DIR = os.getenv("MANGA_DOWNLOAD_DIR", os.path.join(BASE_DIR, "downloads"))
 
 init_db()
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 client = MangaKawaiiClient()
 
 tasks: Dict[str, Dict] = {}
@@ -82,6 +100,10 @@ class BatchTranslateChapterRequest(BaseModel):
     end_page: Optional[int] = None
 
 
+class InstantVoiceRequest(BaseModel):
+    text: str
+
+
 def get_all_manga_files():
     data = {}
     if not os.path.exists(DOWNLOAD_DIR):
@@ -125,6 +147,55 @@ def index_page(request: Request):
             "total_size_mb": total_size_mb
         }
     )
+
+
+@app.get("/manifest.webmanifest")
+def pwa_manifest():
+    return JSONResponse({
+        "id": "/", "name": "MangaReader", "short_name": "MangaReader",
+        "description": "Локальная библиотека манги и ридер",
+        "start_url": "/", "scope": "/", "display": "standalone",
+        "background_color": "#111827", "theme_color": "#111827",
+        "icons": [
+            {"src": "/static/pwa-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/static/pwa-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }, media_type="application/manifest+json")
+
+
+@app.get("/pwa-icon.svg")
+def pwa_icon(size: int = Query(192, ge=192, le=512)):
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 192 192"><rect width="192" height="192" rx="42" fill="#111827"/><path d="M38 42h53c12 0 20 8 20 20v90c0-12-8-20-20-20H38z" fill="#f97316"/><path d="M154 42h-33c-6 0-10 8-10 20v90c0-12 8-20 17-20h26z" fill="#fff"/><path d="M55 67h39M55 83h39M55 99h29" stroke="#fff" stroke-width="7" stroke-linecap="round"/></svg>'''
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/sw.js")
+def pwa_service_worker():
+    script = '''const CACHE = "mangai-shell-v1";
+self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(["/", "/manifest.webmanifest", "/static/pwa-192.png", "/static/pwa-512.png"]))));
+self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
+self.addEventListener("fetch", event => {
+  const request = event.request;
+  if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/page-image/")) {
+    event.respondWith(caches.open(CACHE).then(async cache => {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      const response = await fetch(request);
+      if (response.ok) cache.put(request, response.clone());
+      return response;
+    }));
+    return;
+  }
+  if (url.pathname === "/" || url.pathname.startsWith("/reader/")) {
+    event.respondWith(fetch(request).then(response => {
+      if (!response.ok) return response;
+      return caches.open(CACHE).then(cache => cache.put(request, response.clone()).then(() => response));
+    }).catch(async () => (await caches.match(request)) || (await caches.match("/"))));
+  }
+});'''
+    return Response(script, media_type="application/javascript", headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
 
 
 @app.get("/reader/{manga_name}/{filename}", response_class=HTMLResponse)
@@ -238,125 +309,267 @@ def get_page_overlays(manga_name: str, filename: str, page_idx: int):
     if saved_bubbles and any(bubble.get("source") != "yolo26n-v3" for bubble in saved_bubbles):
         stale_keys = {make_box_key(bubble.get("box")) for bubble in saved_bubbles if bubble.get("box")}
         items = [item for item in items if make_box_key(item.get("box")) not in stale_keys]
+    chapter_bubbles = get_all_cached_chapter_bubbles(manga_name, filename)
+    if chapter_bubbles:
+        cached_voiceover = get_cached_chapter_voiceover(
+            manga_name, filename, chapter_fingerprint(chapter_bubbles), include_audio=False
+        )
+        if cached_voiceover and cached_voiceover.get("model") == GEMINI_TTS_MODEL:
+            emotions = {(bubble["page_idx"], make_box_key(bubble["box"])): bubble.get("emotion", "neutral")
+                        for bubble in cached_voiceover["bubbles"]}
+            for item in items:
+                item["emotion"] = emotions.get((page_idx, make_box_key(item.get("box"))), "neutral")
     return items
 
 
-# Deepgram Aura-2 French Male TTS (Hector)
-DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
-DEEPGRAM_VOICE_MODEL = os.environ.get("DEEPGRAM_VOICE_MODEL", "aura-2-hector-fr")
-DEEPGRAM_VOICE_TAG = f"deepgram_{DEEPGRAM_VOICE_MODEL}"
+@app.get("/api/chapter-text-stats/{manga_name}/{filename}")
+def chapter_text_stats(manga_name: str, filename: str):
+    if not os.path.exists(chapter_path(manga_name, filename)):
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return get_chapter_text_stats(manga_name, filename)
 
 
-def normalize_french_for_tts(text: str) -> str:
-    """
-    Normalizes manga speech text so Deepgram speaks in a continuous, natural cadence:
-    1. Glues OCR-broken and line-wrapped hyphenated words (e.g. 'MAIN-TENANT' -> 'maintenant').
-    2. Fixes spaced apostrophes and contractions (e.g. 'c ' est' -> 'c\'est', 'd \' un' -> 'd\'un').
-    3. Normalizes Comic ALL-CAPS font to standard sentence casing to prevent syllable-by-syllable or spelled-out delivery.
-    """
-    if not text:
-        return ""
-    
-    # Common legitimate French hyphenated words to preserve
-    legit_hyphens = {
-        "est-ce", "peut-être", "rendez-vous", "au-dessus", "au-dessous",
-        "celui-ci", "celle-ci", "ceux-ci", "celles-ci", "là-bas", "par-dessus"
+@app.get("/api/reading-order/{manga_name}/{filename}/{page_idx}")
+def get_reading_order(manga_name: str, filename: str, page_idx: int):
+    """Return cached translations in a Jev-ranked narrative order for audio mode."""
+    chapter = chapter_path(manga_name, filename)
+    if not os.path.exists(chapter):
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    page_bubbles = get_cached_page_bubbles(manga_name, filename, page_idx) or []
+    translations_by_box = {
+        make_box_key(item.get("box")): item
+        for item in get_all_cached_translations_for_page(manga_name, filename, page_idx)
+        if item.get("box")
     }
+    items = []
+    if page_bubbles:
+        for bubble in page_bubbles:
+            translation = translations_by_box.get(make_box_key(bubble.get("box"))) or bubble.get("translation") or {}
+            if (bubble.get("box") and is_usable_ocr_text(translation.get("original", ""))
+                    and is_russian_translation(translation.get("original", ""), translation.get("natural", ""))):
+                items.append({"box": bubble["box"], **translation})
+    if not items:
+        items = [i for i in get_all_cached_translations_for_page(manga_name, filename, page_idx)
+                 if i.get("box") and i.get("original")]
+    if not items:
+        raise HTTPException(status_code=409, detail="Сначала распознайте и переведите баблы на странице")
 
-    # Rejoin line-wrap hyphens with space: "CONNAIS- SIEZ" -> "CONNAISSIEZ"
-    text = re.sub(r"([A-Za-zÀ-ÿ]{2,})-\s+([A-Za-zÀ-ÿ]{2,})", r"\1\2", text)
+    def geometric_key(item):
+        box = item["box"]
+        # Manga panels are commonly read right-to-left; row grouping stays a fallback only.
+        return (round(float(box.get("y", 0)) / max(float(box.get("h", 1)), 1) * 0.55), -float(box.get("x", 0)))
 
-    # Rejoin word-break hyphens: "MAIN-TENANT" -> "MAINTENANT"
-    def clean_hyphen(m):
-        full = m.group(0).lower()
-        if full in legit_hyphens or m.group(2).lower() in ["tu", "vous", "il", "elle", "ils", "elles", "on", "moi", "toi", "lui", "la", "le", "les", "ce", "en", "y"]:
-            return m.group(0)
-        return m.group(1) + m.group(2)
-
-    text = re.sub(r"([A-Za-zÀ-ÿ]{3,})-([A-Za-zÀ-ÿ]{3,})", clean_hyphen, text)
-
-    # Rejoin detached apostrophes: "C ' EST" -> "C'EST"
-    text = re.sub(r"([A-Za-zÀ-ÿ])\s*['’`]\s*([A-Za-zÀ-ÿ])", r"\1'\2", text)
-
-    # Collapse multiple spaces and newlines into a single clean space
-    text = re.sub(r"\s+", " ", text).strip()
-
-    # Convert ALL-CAPS manga lettering into natural sentence case
-    if text.isupper() and len(text) > 3:
-        parts = re.split(r"([.!?]+\s*)", text.lower())
-        cased = ""
-        for p in parts:
-            if p:
-                cased += p[0].upper() + p[1:] if len(p) > 1 else p.upper()
-        text = cased
-
-    return text
-
-
-def call_deepgram_tts(clean_text: str) -> bytes:
-    """Synthesize speech strictly with Deepgram (aura-2-hector-fr) and return MP3 audio bytes."""
-    if not DEEPGRAM_API_KEY:
-        raise RuntimeError("DEEPGRAM_API_KEY is not configured")
-
-    # Pass fluent, natural French text into Deepgram
-    tts_text = normalize_french_for_tts(clean_text)
-    if not tts_text:
-        tts_text = clean_text
-
-    url = f"https://api.deepgram.com/v1/speak?model={DEEPGRAM_VOICE_MODEL}"
-    payload = json.dumps({"text": tts_text}).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            "Authorization": f"Token {DEEPGRAM_API_KEY}",
-            "Content-Type": "application/json"
-        }
-    )
-    try:
-        resp = urllib.request.urlopen(req, timeout=12)
-        audio_bytes = resp.read()
-        if len(audio_bytes) < 100:
-            raise RuntimeError("Deepgram returned empty audio response")
-        return audio_bytes
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Deepgram HTTP {e.code}: {err_msg}")
-    except Exception as e:
-        raise RuntimeError(f"Deepgram TTS error: {e}")
-
-
-@app.get("/api/voice-tts")
-def voice_tts(text: str = Query(..., min_length=1), lang: str = Query("fr"), emotion: str = Query("neutral")):
-    """Use Deepgram French male voice (Hector) with persistent SQLite audio cache."""
-    clean_text = text.strip()[:400]
-    if not DEEPGRAM_API_KEY:
-        raise HTTPException(status_code=503, detail="Deepgram TTS is not configured")
-
-    cached = get_cached_audio(clean_text, voice_tag=DEEPGRAM_VOICE_TAG)
+    fallback = sorted(items, key=geometric_key)
+    digest_data = [{"box": i["box"], "original": i.get("original", ""), "natural": i.get("natural", "")} for i in items]
+    fingerprint = hashlib.sha256(json.dumps(digest_data, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    cached = get_cached_reading_order(manga_name, filename, page_idx, fingerprint)
     if cached:
-        return Response(content=cached[0], media_type=cached[1])
+        ordered = [items[index] for index in cached if isinstance(index, int) and 0 <= index < len(items)]
+        if len(ordered) == len(items):
+            return ordered
 
+    api_key = os.getenv("TYPESAFE_API_KEY", "")
+    if api_key and len(items) > 1 and len(items) <= 50:
+        ids = [str(n) for n in range(len(items))]
+        state = {"speech_bubbles": [
+            {"id": ids[n], "text": (item.get("natural") or item.get("original") or "")[:500],
+             "position": {"x": item["box"].get("x"), "y": item["box"].get("y")}}
+            for n, item in enumerate(items)
+        ]}
+        positions = {str(n + 1): f"Narrative position {n + 1}, from first to last." for n in range(len(items))}
+        questions = {
+            f"bubble_{n}": {
+                "type": "choice",
+                "instructions": (
+                    f"For speech_bubbles[{n}] in state, choose its most likely position in the page's spoken narrative. "
+                    "Use the dialogue meaning, pronoun references, question-answer links, cause and effect, and speaker turns. "
+                    "Use spatial manga reading order as a tie-breaker: panels generally progress from top to bottom and right to left. "
+                    "Assign a distinct sensible position where possible; do not put a reply before the line it answers."
+                ),
+                "criteria": positions,
+            } for n in range(len(items))
+        }
+        payload = json.dumps({"model": "jev-latest", "state": state, "questions": questions}).encode()
+        request = urllib.request.Request(
+            "https://api.typesafe.ai/v1/systemone", data=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=35) as response:
+                answers = json.loads(response.read()).get("answers", {})
+            scores = []
+            for n in range(len(items)):
+                answer = answers.get(f"bubble_{n}", {})
+                distribution = answer.get("probabilities") or {}
+                scores.append(sum(int(position) * float(probability) for position, probability in distribution.items()
+                                  if position.isdigit()) if distribution else int(answer.get("choice", n + 1)))
+            ranked = sorted(range(len(items)), key=lambda n: (scores[n], geometric_key(items[n])))
+            ordered = [items[n] for n in ranked]
+            save_cached_reading_order(manga_name, filename, page_idx, fingerprint, ranked)
+            return ordered
+        except (urllib.error.URLError, TimeoutError, ValueError, KeyError) as error:
+            print(f"[!] Jev reading order unavailable: {type(error).__name__}; using spatial order")
+    return fallback
+
+
+@app.get("/api/chapter-voiceover/{manga_name}/{filename}")
+def chapter_voiceover_status(manga_name: str, filename: str):
+    if not os.path.exists(chapter_path(manga_name, filename)):
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    items = get_all_cached_chapter_bubbles(manga_name, filename)
+    if not items:
+        return {"status": "missing_bubbles", "bubbles": 0}
+    fingerprint = chapter_fingerprint(items)
+    cached = get_cached_chapter_voiceover(manga_name, filename, fingerprint, include_audio=False)
+    if cached and cached.get("model") != GEMINI_TTS_MODEL:
+        cached = None
+    if cached:
+        cached_bubbles = [dict(item) for item in cached["bubbles"]]
+        analysis = get_cached_chapter_voiceover_analysis(manga_name, filename, fingerprint) or []
+        annotations = {item["id"]: item for item in analysis}
+        for bubble in cached_bubbles:
+            annotation = annotations.get(bubble["id"], {})
+            for key in ("pairwise_order", "emotion"):
+                if key in annotation:
+                    bubble[key] = annotation[key]
+        cached_bubbles = order_chapter_items(cached_bubbles)
+        return {"status": "ready", "fingerprint": fingerprint, "segments": cached["segments"],
+                "bubbles": cached_bubbles, "duration": cached["duration"],
+                "voice": cached["voice"], "model": cached["model"]}
+    active = next((task for task in tasks.values()
+                   if task.get("kind") == "chapter_voiceover" and task.get("manga_name") == manga_name
+                   and task.get("filename") == filename and task.get("fingerprint") == fingerprint
+                   and task.get("status") in {"pending", "in_progress"}), None)
+    if active:
+        return {"status": active["status"], "task_id": active["id"], "message": active.get("message"),
+                "progress": active.get("progress", 0), "bubbles": len(items)}
+    return {"status": "not_ready", "fingerprint": fingerprint, "bubbles": len(items)}
+
+
+@app.post("/api/chapter-voiceover/{manga_name}/{filename}")
+def start_chapter_voiceover(manga_name: str, filename: str, background_tasks: BackgroundTasks):
+    chapter = chapter_path(manga_name, filename)
+    if not os.path.exists(chapter):
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    items = get_all_cached_chapter_bubbles(manga_name, filename)
+    if not items:
+        raise HTTPException(status_code=409, detail="Сначала распознай и переведи баблы главы.")
+    fingerprint = chapter_fingerprint(items)
+    cached = get_cached_chapter_voiceover(manga_name, filename, fingerprint, include_audio=False)
+    if cached and cached.get("model") == GEMINI_TTS_MODEL:
+        return {"status": "ready", "cached": True, "bubbles": len(items), "duration": cached["duration"]}
+    staged_audio = get_staged_chapter_voiceover_audio(
+        manga_name, filename, fingerprint, GEMINI_TTS_MODEL)
+    analyzed = get_cached_chapter_voiceover_analysis(manga_name, filename, fingerprint)
+    if not staged_audio and not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(status_code=503, detail="Добавь GEMINI_API_KEY в локальный .env для Gemini TTS.")
+    if not analyzed and not os.getenv("TYPESAFE_API_KEY"):
+        raise HTTPException(status_code=503, detail="Добавь TYPESAFE_API_KEY для порядка реплик Jev.")
+    for task in tasks.values():
+        if (task.get("kind") == "chapter_voiceover" and task.get("manga_name") == manga_name
+                and task.get("filename") == filename and task.get("fingerprint") == fingerprint
+                and task.get("status") in {"pending", "in_progress"}):
+            return {"status": task["status"], "task_id": task["id"], "reused": True}
+    task_id = str(uuid.uuid4())
+    tasks[task_id] = {"id": task_id, "kind": "chapter_voiceover", "manga_name": manga_name,
+                      "filename": filename, "fingerprint": fingerprint, "status": "pending",
+                      "progress": 0, "message": "Задача озвучки поставлена в очередь…", "bubbles": len(items)}
+    background_tasks.add_task(bg_chapter_voiceover, task_id, manga_name, filename, fingerprint, items)
+    return {"status": "pending", "task_id": task_id, "bubbles": len(items)}
+
+
+@app.post("/api/instant-voice")
+def instant_voice(req: InstantVoiceRequest):
+    """Generate a non-cached single-bubble preview with Deepgram."""
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Текст реплики пуст.")
+    if len(text) > 2000:
+        raise HTTPException(status_code=413, detail="Мгновенная реплика превышает лимит Deepgram в 2000 символов.")
+    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Добавь DEEPGRAM_API_KEY для мгновенной озвучки Deepgram.")
     try:
-        audio_bytes = call_deepgram_tts(clean_text)
-        save_cached_audio(clean_text, audio_bytes, "audio/mpeg", voice_tag=DEEPGRAM_VOICE_TAG)
-        return Response(content=audio_bytes, media_type="audio/mpeg")
-    except Exception as e:
-        print(f"[!] Deepgram speech error: {e}")
-        raise HTTPException(status_code=502, detail=f"Deepgram speech synthesis failed: {e}")
+        response = requests.post(
+            "https://api.deepgram.com/v1/speak",
+            params={"model": DEEPGRAM_TTS_MODEL, "encoding": "linear16", "container": "wav"},
+            headers={"Authorization": f"Token {api_key}"}, json={"text": text}, timeout=(15, 180))
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"Deepgram недоступен: {type(error).__name__}") from error
+    if not response.ok:
+        raise HTTPException(status_code=502, detail=f"Deepgram вернул HTTP {response.status_code}.")
+    if not response.content.startswith(b"RIFF"):
+        raise HTTPException(status_code=502, detail="Deepgram вернул некорректный WAV.")
+    return Response(content=response.content, media_type="audio/wav",
+                    headers={"Cache-Control": "no-store", "X-TTS-Provider": "Deepgram"})
 
 
-@app.post("/api/clear-offline-cache")
-def clear_offline_cache_endpoint(manga_name: Optional[str] = Query(None), filename: Optional[str] = Query(None)):
-    """
-    Clears local offline database (translations, bubbles, audio).
-    Can target an entire manga/chapter or completely wipe all local cache.
-    """
+@app.get("/api/chapter-voiceover/{manga_name}/{filename}/audio")
+def get_chapter_voiceover_audio(manga_name: str, filename: str):
+    if not os.path.exists(chapter_path(manga_name, filename)):
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    items = get_all_cached_chapter_bubbles(manga_name, filename)
+    cached = get_cached_chapter_voiceover(manga_name, filename, chapter_fingerprint(items)) if items else None
+    if not cached or cached.get("model") != GEMINI_TTS_MODEL:
+        raise HTTPException(status_code=404, detail="Озвучка главы ещё не собрана")
+    return Response(content=cached["audio_data"], media_type=cached["media_type"],
+                    headers={"Cache-Control": "private, max-age=31536000", "Accept-Ranges": "none"})
+
+
+def bg_chapter_voiceover(task_id: str, manga_name: str, filename: str, fingerprint: str, items: List[Dict]):
+    task = tasks[task_id]
+    task.update(status="in_progress", progress=5, message="Jev расставляет реплики и отмечает эмоции…")
     try:
-        stats = clear_offline_cache(manga_name, filename)
-        return {"status": "ok", "deleted": stats}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        analyzed = get_cached_chapter_voiceover_analysis(manga_name, filename, fingerprint)
+        if analyzed and has_pairwise_order_analysis(items):
+            items = order_chapter_items(analyzed)
+            save_cached_chapter_voiceover_analysis(manga_name, filename, fingerprint, items)
+            task.update(progress=24, message="Беру сохранённый порядок Jev и метки эмоций…")
+        else:
+            items = analyze_chapter_with_jev(items, os.getenv("TYPESAFE_API_KEY", ""))
+            save_cached_chapter_voiceover_analysis(manga_name, filename, fingerprint, items)
+        staged_audio = get_staged_chapter_voiceover_audio(
+            manga_name, filename, fingerprint, GEMINI_TTS_MODEL)
+        if staged_audio:
+            audio_data, media_type = staged_audio
+            task.update(progress=74, message="Использую сохранённую Gemini-дорожку; Whisper уточняет границы фраз…")
+        else:
+            task.update(progress=25, message="Gemini готовит офлайн-аудиоглаву и сохраняет пакеты локально…")
+
+            def load_tts_chunk(index, digest):
+                return get_cached_chapter_voiceover_tts_chunk(
+                    manga_name, filename, fingerprint, GEMINI_TTS_MODEL, index, digest)
+
+            def save_tts_chunk(index, digest, chunk_audio):
+                save_cached_chapter_voiceover_tts_chunk(
+                    manga_name, filename, fingerprint, GEMINI_TTS_MODEL, index, digest,
+                    chunk_audio, "audio/wav")
+
+            def update_tts_progress(done, total):
+                progress = 30 + int(42 * done / max(1, total))
+                task.update(progress=progress,
+                            message=f"Gemini формирует офлайн-аудио: часть {done}/{total} ({GEMINI_TTS_MODEL})…")
+
+            audio_data, media_type = synthesize_chapter_gemini(
+                items, os.getenv("GEMINI_API_KEY", ""), model=GEMINI_TTS_MODEL,
+                load_chunk=load_tts_chunk, save_chunk=save_tts_chunk,
+                on_progress=update_tts_progress)
+            save_staged_chapter_voiceover_audio(manga_name, filename, fingerprint, audio_data,
+                                                media_type, GEMINI_TTS_MODEL)
+            delete_cached_chapter_voiceover_tts_chunks(manga_name, filename, fingerprint)
+        task.update(progress=75, message="Whisper Small локально снимает временные метки…")
+        segments, duration = transcribe_and_align(audio_data, items, os.getenv("WHISPER_MODEL", "small"))
+        task.update(progress=95, message="Сохраняю аудио и тайминги баблов локально…")
+        public_bubbles = [{key: item[key] for key in ("id", "page_idx", "box", "original", "natural", "emotion", "pairwise_order") if key in item}
+                          for item in items]
+        save_cached_chapter_voiceover(manga_name, filename, fingerprint, audio_data, media_type,
+                                      segments, public_bubbles, duration,
+                                      GEMINI_FRENCH_MALE_VOICE, GEMINI_TTS_MODEL)
+        delete_staged_chapter_voiceover_audio(manga_name, filename, fingerprint)
+        task.update(status="completed", progress=100,
+                    message=f"Глава готова: {len(items)} баблов, {duration / 60:.1f} минут. Аудио и тайминги сохранены локально.",
+                    duration=duration, voice=GEMINI_FRENCH_MALE_VOICE)
+    except Exception as error:
+        task.update(status="failed", error=str(error), message=f"Не удалось собрать аудиоглаву: {error}")
 
 
 def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
@@ -378,50 +591,30 @@ def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):
         for idx in range(start_p, end_p):
             tasks[task_id]["current_page"] = idx + 1
             tasks[task_id]["message"] = f"Страница {idx+1}/{end_p}: Распознавание и перевод..."
-            
-            # 1. Translate bubbles on this page
-            page_bubbles = get_cached_page_bubbles(req.manga_name, req.filename, idx)
-            page_ready = is_page_fully_translated(req.manga_name, req.filename, idx)
-            voice_tag = DEEPGRAM_VOICE_TAG
-            audio_ready = bool(page_bubbles) and all(
-                not (bubble.get("translation") or {}).get("original", "").strip()
-                or get_cached_audio((bubble.get("translation") or {}).get("original", ""), voice_tag=voice_tag)
-                for bubble in page_bubbles
-            )
-            if page_ready and audio_ready:
-                tasks[task_id]["completed_pages"] += 1
-                continue
-            if not page_ready:
-                page_bubbles = MangaTranslatorService.batch_translate_page(
+            if not is_page_fully_translated(req.manga_name, req.filename, idx):
+                MangaTranslatorService.batch_translate_page(
                     cbz_path=file_path,
                     manga_name=req.manga_name,
                     filename=req.filename,
-                    page_idx=idx
+                    page_idx=idx,
                 )
-            page_bubbles = page_bubbles or []
-
-            # 2. Pre-generate available French speech once with Deepgram; future plays use SQLite cache.
-            for b in page_bubbles:
-                tr = b.get("translation") or {}
-                orig_text = tr.get("original", "").strip()
-                if orig_text and len(orig_text) > 1:
-                    voice_tag = DEEPGRAM_VOICE_TAG
-                    if DEEPGRAM_API_KEY and not get_cached_audio(orig_text, voice_tag=voice_tag):
-                        try:
-                            audio_bytes = call_deepgram_tts(orig_text)
-                            save_cached_audio(orig_text, audio_bytes, "audio/mpeg", voice_tag=voice_tag)
-                        except Exception as e:
-                            print(f"[!] Deepgram speech cache skipped for '{orig_text[:20]}': {e}")
-
             tasks[task_id]["completed_pages"] += 1
             time.sleep(0.35)
 
         tasks[task_id]["status"] = "completed"
-        tasks[task_id]["message"] = f"Обработано {end_p - start_p} страниц. Позиции, переводы и доступная озвучка сохранены локально."
+        tasks[task_id]["message"] = f"Обработано {end_p - start_p} страниц. Позиции, распознанный текст и переводы сохранены локально."
     except Exception as e:
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = str(e)
         tasks[task_id]["message"] = f"Ошибка: {e}"
+
+
+@app.post("/api/clear-offline-cache")
+def clear_offline_cache_endpoint(manga_name: Optional[str] = Query(None), filename: Optional[str] = Query(None)):
+    try:
+        return {"status": "ok", "deleted": clear_offline_cache(manga_name, filename)}
+    except Exception as error:
+        raise HTTPException(status_code=500, detail="Не удалось очистить локальный кэш.") from error
 
 
 @app.post("/api/batch-translate-chapter")

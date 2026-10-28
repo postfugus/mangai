@@ -9,6 +9,8 @@ requests
 pytesseract
 ai-edge-litert
 ctranslate2
+faster-whisper
+# faster-whisper 1.2.1 calls av.open(..., metadata_errors="ignore"), removed in PyAV 19.
+av<19
 sentencepiece
-elevenlabs
 python-dotenv
