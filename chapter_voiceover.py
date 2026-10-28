@@ -656,28 +656,37 @@ def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float
 
 @lru_cache(maxsize=1)
 def _whisper_model(model_name: str):
-    from faster_whisper import WhisperModel
-    return WhisperModel(model_name, device="cpu", compute_type="int8")
+    try:
+        from faster_whisper import WhisperModel
+        return WhisperModel(model_name, device="cpu", compute_type="int8")
+    except ImportError:
+        return None
 
 
 def transcribe_and_align(audio: bytes, items: List[Dict], model_name: str = "small") -> Tuple[Dict, float]:
-    model = _whisper_model(model_name)
-    with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
-        audio_file.write(audio)
-        audio_file.flush()
-        # Disable cross-window prompt carry and enable VAD. Long concatenated TTS
-        # tracks can otherwise produce empty alignment token batches inside
-        # faster-whisper, raising IndexError and discarding the entire chapter.
-        segments, _ = model.transcribe(audio_file.name, language="fr", beam_size=1,
-                                       word_timestamps=True, vad_filter=True,
-                                       condition_on_previous_text=False)
-        words = []
-        for segment in segments:
-            for word in segment.words or []:
-                words.append({"text": word.word, "start": word.start, "end": word.end})
-            if not segment.words:
-                words.append({"text": segment.text, "start": segment.start, "end": segment.end})
     with wave.open(io.BytesIO(audio), "rb") as wav_file:
         duration = wav_file.getnframes() / float(wav_file.getframerate())
     rms, frame_seconds = _audio_rms_envelope(audio)
+
+    model = _whisper_model(model_name)
+    words = []
+    if model is not None:
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
+                audio_file.write(audio)
+                audio_file.flush()
+                segments, _ = model.transcribe(audio_file.name, language="fr", beam_size=1,
+                                               word_timestamps=True, vad_filter=True,
+                                               condition_on_previous_text=False)
+                for segment in segments:
+                    for word in segment.words or []:
+                        words.append({"text": word.word, "start": word.start, "end": word.end})
+                    if not segment.words:
+                        words.append({"text": segment.text, "start": segment.start, "end": segment.end})
+        except Exception as e:
+            print(f"[!] Whisper transcription skipped, falling back to proportional alignment: {e}")
+            words = []
+    else:
+        print("[*] faster-whisper is not installed. Using acoustic RMS & proportional alignment.")
+
     return align_bubbles_to_words(items, words, duration, rms, frame_seconds), duration
