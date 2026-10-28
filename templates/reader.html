@@ -334,7 +334,8 @@
     <div class="w-full max-w-sm rounded-2xl border border-base-300 bg-base-100 p-5 shadow-2xl space-y-4">
       <div class="flex items-center justify-between"><h2 class="text-lg font-extrabold">Настройки чтения</h2><button onclick="closeReadingSettings()" class="btn btn-ghost btn-sm btn-circle" aria-label="Закрыть">✕</button></div>
       <label class="flex items-center justify-between gap-3"><span><strong>Полный экран</strong><small class="block opacity-60">Скрыть панели и читать без лишнего</small></span><input id="cleanReadingToggle" type="checkbox" class="toggle toggle-primary" onchange="toggleCleanReading(this.checked)"></label>
-      <label class="flex items-center justify-between gap-3"><span><strong>Показывать переводы</strong><small class="block opacity-60">Скрыть или вернуть баблы с переводом</small></span><input id="translationVisibilityToggle" type="checkbox" class="toggle toggle-primary" checked onchange="toggleTranslations(this.checked)"></label>
+      <label class="flex items-center justify-between gap-3"><span><strong>Показывать русский перевод</strong><small class="block opacity-60">По умолчанию в баблах язык оригинала, включите для русского</small></span><input id="showRussianToggle" type="checkbox" class="toggle toggle-primary" onchange="toggleShowRussian(this.checked)"></label>
+      <label class="flex items-center justify-between gap-3"><span><strong>Видимость плашек</strong><small class="block opacity-60">Скрыть или вернуть все плашки баблов</small></span><input id="translationVisibilityToggle" type="checkbox" class="toggle toggle-primary" checked onchange="toggleTranslations(this.checked)"></label>
       <button id="installAppButton" onclick="installApp()" class="btn btn-primary w-full"><i class="fa-solid fa-download"></i> Установить приложение</button>
       <p id="installHint" class="text-xs opacity-60">Установка доступна через меню браузера при защищённом HTTPS-подключении.</p>
     </div>
@@ -382,12 +383,12 @@
   <div id="audioReadingControls" class="fixed bottom-[62px] inset-x-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:w-[min(680px,calc(100vw-24px))] rounded-2xl border border-base-300 bg-base-100/95 shadow-xl px-2 py-2 items-center justify-between gap-2" style="display:none">
     <span id="audioLineCounter" class="badge badge-neutral font-bold whitespace-nowrap">0 / 0</span>
     <select id="audioAnimationMode" class="select select-bordered select-xs" aria-label="Анимация реплики" onchange="showCurrentAudioBubble(false)">
-      <option value="zoom">Зум + подсветка</option>
       <option value="highlight">Только подсветка</option>
+      <option value="zoom">Зум + подсветка</option>
       <option value="none">Без анимации</option>
     </select>
     <button onclick="previousAudioLine()" class="btn btn-sm btn-ghost" title="Предыдущая реплика"><i class="fa-solid fa-backward-step"></i><span class="hidden sm:inline">Назад</span></button>
-    <button id="audioPlayButton" onclick="replayAudioLine()" class="btn btn-sm btn-primary" title="Повторить реплику"><i class="fa-solid fa-play"></i></button>
+    <button id="audioPlayButton" onclick="toggleContinuousChapterAudio()" class="btn btn-sm btn-primary" title="Воспроизведение / Пауза"><i id="audioPlayIcon" class="fa-solid fa-play"></i></button>
     <button onclick="nextAudioLine()" class="btn btn-sm btn-primary" title="Следующая реплика"><span class="hidden sm:inline">Далее</span><i class="fa-solid fa-forward-step"></i></button>
     <button id="chapterVoiceoverBtn" onclick="prepareChapterVoiceover()" class="btn btn-sm btn-secondary" title="Собрать одну озвучку на всю главу"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Аудиоглава</span></button>
   </div>
@@ -504,6 +505,8 @@
     let chapterAudioGain = null;
     let chapterAudioFadeUnavailable = false;
     let chapterSegmentPlaybackId = 0;
+    let showRussianTranslations = localStorage.getItem('mk-show-russian') === '1';
+    let audioSyncTrackingEnabled = false;
     document.addEventListener('DOMContentLoaded', () => {
       document.documentElement.setAttribute('data-theme', localStorage.getItem('mk-theme') || 'dark');
       initReader();
@@ -512,6 +515,8 @@
     function initReader() {
       const slider = document.getElementById('pageSlider');
       slider.max = Math.max(0, PAGES_LIST.length - 1);
+      const ruToggle = document.getElementById('showRussianToggle');
+      if (ruToggle) ruToggle.checked = showRussianTranslations;
       loadChapterTextStats();
       loadPage(0);
       setupSelectionHandlers();
@@ -595,6 +600,20 @@
     function toggleTranslations(enabled) {
       document.body.classList.toggle('hide-translations', !enabled);
       document.getElementById('translationVisibilityToggle').checked = enabled;
+    }
+    function toggleShowRussian(enabled) {
+      showRussianTranslations = enabled;
+      localStorage.setItem('mk-show-russian', enabled ? '1' : '0');
+      document.getElementById('showRussianToggle').checked = enabled;
+      document.querySelectorAll('#replacementsLayer .in-bubble-replacement, .webtoon-page .in-bubble-replacement').forEach(el => {
+        const textSpan = el.querySelector('.in-bubble-text');
+        if (textSpan) {
+          textSpan.innerText = enabled
+            ? (el.dataset.russianText || el.dataset.origText || '')
+            : (el.dataset.origText || el.dataset.russianText || '');
+        }
+        fitBubbleText(el, el.closest('.webtoon-page')?.querySelector('img') || document.getElementById('currentImage'));
+      });
     }
     document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeReadingSettings(); if (document.body.classList.contains('clean-reading')) toggleCleanReading(false); } });
     async function initPwa() {
@@ -743,7 +762,105 @@
           wrapper.style.transform = '';
         }
       }
-      if (playAudio) playChapterVoiceoverSegment(item.page_idx ?? currentPageIdx, item.box);
+      if (playAudio) {
+        playContinuousChapterAudioFromIndex(audioReadingIndex);
+      }
+    }
+
+    async function playContinuousChapterAudioFromIndex(targetIndex) {
+      if (!chapterVoiceover?.bubbles?.length) {
+        const data = await prepareChapterVoiceover();
+        if (data) playContinuousChapterAudioFromIndex(targetIndex);
+        return;
+      }
+      audioReadingIndex = Math.max(0, Math.min(targetIndex, chapterVoiceover.bubbles.length - 1));
+      const currentItem = chapterVoiceover.bubbles[audioReadingIndex];
+      const timing = currentItem && chapterVoiceover.segments?.[currentItem.id];
+      await ensureChapterAudioLoaded();
+      const audio = document.getElementById('ttsAudio');
+      audio.volume = 1;
+
+      if (timing && Number.isFinite(timing.start)) {
+        audio.currentTime = Math.max(0, timing.start);
+      }
+      setupContinuousAudioSync();
+      await audio.play();
+      updateAudioPlayIcon(true);
+    }
+
+    function toggleContinuousChapterAudio() {
+      const audio = document.getElementById('ttsAudio');
+      if (audio.paused) {
+        if (!chapterVoiceoverObjectUrl || audio.dataset.sourceKind !== 'chapter') {
+          playContinuousChapterAudioFromIndex(audioReadingIndex >= 0 ? audioReadingIndex : 0);
+        } else {
+          setupContinuousAudioSync();
+          audio.play();
+          updateAudioPlayIcon(true);
+        }
+      } else {
+        audio.pause();
+        updateAudioPlayIcon(false);
+      }
+    }
+
+    function updateAudioPlayIcon(isPlaying) {
+      const icon = document.getElementById('audioPlayIcon');
+      if (icon) {
+        icon.className = isPlaying ? 'fa-solid fa-pause' : 'fa-solid fa-play';
+      }
+    }
+
+    function setupContinuousAudioSync() {
+      const audio = document.getElementById('ttsAudio');
+      audio.ontimeupdate = onAudioTimelineProgress;
+      audio.onended = () => {
+        updateAudioPlayIcon(false);
+        finishAudioReading();
+      };
+      audio.onpause = () => updateAudioPlayIcon(false);
+      audio.onplay = () => updateAudioPlayIcon(true);
+    }
+
+    function onAudioTimelineProgress() {
+      if (!audioReadingActive || !chapterVoiceover?.bubbles?.length) return;
+      const audio = document.getElementById('ttsAudio');
+      const time = audio.currentTime;
+      const segments = chapterVoiceover.segments || {};
+
+      // Находим текущий активный бабл по точному времени аудиодорожки
+      let matchedIdx = -1;
+      for (let i = 0; i < chapterVoiceover.bubbles.length; i++) {
+        const b = chapterVoiceover.bubbles[i];
+        const seg = segments[b.id];
+        if (seg && time >= seg.start - 0.05 && time <= seg.end + 0.15) {
+          matchedIdx = i;
+          break;
+        }
+      }
+
+      // Если в паузе между репликами, берём следующий ближайший
+      if (matchedIdx < 0) {
+        for (let i = 0; i < chapterVoiceover.bubbles.length; i++) {
+          const seg = segments[chapterVoiceover.bubbles[i].id];
+          if (seg && seg.start > time) {
+            matchedIdx = Math.max(0, i - 1);
+            break;
+          }
+        }
+      }
+
+      if (matchedIdx >= 0 && matchedIdx !== audioReadingIndex) {
+        audioReadingIndex = matchedIdx;
+        const targetItem = chapterVoiceover.bubbles[matchedIdx];
+        // Если реплика на другой странице — автоматически перелистываем страницу манги!
+        if (targetItem.page_idx !== currentPageIdx) {
+          pendingAudioIndex = matchedIdx;
+          loadPage(targetItem.page_idx);
+        } else {
+          showCurrentAudioBubble(false);
+        }
+      }
     }
 
     function nextAudioLine() {
@@ -751,8 +868,17 @@
       if (audioReadingIndex + 1 < audioReadingItems.length) {
         audioReadingIndex++;
         const item = audioReadingItems[audioReadingIndex];
-        if (chapterVoiceover && item.page_idx !== currentPageIdx) { pendingAudioIndex = audioReadingIndex; loadPage(item.page_idx); }
-        else showCurrentAudioBubble(true);
+        const timing = chapterVoiceover?.segments?.[item.id];
+        const audio = document.getElementById('ttsAudio');
+        if (timing && Number.isFinite(timing.start)) {
+          audio.currentTime = Math.max(0, timing.start);
+        }
+        if (chapterVoiceover && item.page_idx !== currentPageIdx) {
+          pendingAudioIndex = audioReadingIndex;
+          loadPage(item.page_idx);
+        } else {
+          showCurrentAudioBubble(false);
+        }
       } else {
         finishAudioReading();
       }
@@ -763,8 +889,17 @@
       if (audioReadingIndex > 0) {
         audioReadingIndex--;
         const item = audioReadingItems[audioReadingIndex];
-        if (chapterVoiceover && item.page_idx !== currentPageIdx) { pendingAudioIndex = audioReadingIndex; loadPage(item.page_idx); }
-        else showCurrentAudioBubble(true);
+        const timing = chapterVoiceover?.segments?.[item.id];
+        const audio = document.getElementById('ttsAudio');
+        if (timing && Number.isFinite(timing.start)) {
+          audio.currentTime = Math.max(0, timing.start);
+        }
+        if (chapterVoiceover && item.page_idx !== currentPageIdx) {
+          pendingAudioIndex = audioReadingIndex;
+          loadPage(item.page_idx);
+        } else {
+          showCurrentAudioBubble(false);
+        }
       } else if (currentPageIdx > 0) {
         pendingAudioIndex = -1;
         loadPage(currentPageIdx - 1);
@@ -774,8 +909,12 @@
     function replayAudioLine() {
       if (!audioReadingActive || audioReadingIndex < 0) return;
       const item = audioReadingItems[audioReadingIndex];
-      if (chapterVoiceover && item) playChapterVoiceoverSegment(item.page_idx ?? currentPageIdx, item.box);
-      else playVoiceTTS(item?.original || '', 'neutral');
+      const timing = chapterVoiceover?.segments?.[item?.id];
+      const audio = document.getElementById('ttsAudio');
+      if (timing && Number.isFinite(timing.start)) {
+        audio.currentTime = Math.max(0, timing.start);
+        if (audio.paused) audio.play();
+      }
     }
 
     function chapterVoiceoverUrl() {
@@ -875,15 +1014,27 @@
     }
 
     function playBubbleVoice(pageIdx, box, text) {
-      // Если нажали на конкретный бабл, воспроизводим точно его реплику через мгновенный Deepgram
-      if (text && text.trim()) {
-        return playInstantDeepgramVoice(text).catch(error => alert(error.message || 'Не удалось запустить озвучку.'));
+      const bubble = findChapterBubble(pageIdx, box);
+      const timing = bubble && chapterVoiceover?.segments?.[bubble.id];
+      if (timing && Number.isFinite(timing.start)) {
+        // Локальное непрерывное аудио главы: переходим на время бабла без обрезания
+        ensureChapterAudioLoaded().then(() => {
+          const audio = document.getElementById('ttsAudio');
+          audio.currentTime = Math.max(0, timing.start);
+          audio.ontimeupdate = onAudioTimelineProgress;
+          audio.volume = 1;
+          audio.play();
+          updateAudioPlayIcon(true);
+          const bubbles = Array.from(document.querySelectorAll('#replacementsLayer .in-bubble-replacement'));
+          bubbles.forEach(el => el.classList.remove('audio-current'));
+          const target = findRenderedBubble(bubbles, pageIdx, box);
+          if (target) target.classList.add('audio-current');
+        }).catch(err => {
+          playInstantDeepgramVoice(text).catch(e => alert(e.message || 'Не удалось воспроизвести.'));
+        });
+        return;
       }
-      const cachedBubble = findChapterBubble(pageIdx, box);
-      if (isGeminiOfflineChapterVoiceover() && cachedBubble && chapterVoiceover.segments?.[cachedBubble.id]) {
-        return playChapterVoiceoverSegment(pageIdx, box);
-      }
-      return playInstantDeepgramVoice(text).catch(error => alert(error.message || 'Не удалось запустить озвучку.'));
+      playInstantDeepgramVoice(text).catch(error => alert(error.message || 'Не удалось запустить озвучку.'));
     }
 
     function getChapterAudioFadeGraph(audio) {
@@ -1284,6 +1435,7 @@
       el.dataset.origW = box.w;
       el.dataset.origH = box.h;
       el.dataset.origText = data.original || '';
+      el.dataset.russianText = data.natural || data.translated || '';
 
       el.style.left = box.x + '%';
       el.style.top = box.y + '%';
@@ -1292,7 +1444,10 @@
       
       const textSpan = document.createElement('span');
       textSpan.className = 'in-bubble-text';
-      textSpan.innerText = data.natural || data.translated || '';
+      // По умолчанию отображаем язык оригинала, если не включён русский
+      textSpan.innerText = showRussianTranslations
+        ? (data.natural || data.translated || data.original || '')
+        : (data.original || data.natural || data.translated || '');
       el.appendChild(textSpan);
       const emotionMarks = {
         joy: ['☺', 'Радость'], sadness: ['·', 'Грусть'], anger: ['⚡', 'Злость'],
