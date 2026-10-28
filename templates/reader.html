@@ -789,7 +789,8 @@
       for (const item of chapterVoiceover.bubbles) {
         if (Number(item.page_idx) !== Number(pageIdx) || !item.box) continue;
         const deltas = keys.map(key => Math.abs(Number(item.box[key]) - Number(box[key])));
-        if (deltas.some(delta => !Number.isFinite(delta) || delta > 0.25)) continue;
+        // Допустимая погрешность координат увеличена до 6% для надёжного сопоставления
+        if (deltas.some(delta => !Number.isFinite(delta) || delta > 6.0)) continue;
         const distance = deltas.reduce((sum, delta) => sum + delta * delta, 0);
         if (!best || distance < best.distance) best = { item, distance };
       }
@@ -802,7 +803,7 @@
       for (const element of elements) {
         const deltas = ['origX', 'origY', 'origW', 'origH'].map((key, index) =>
           Math.abs(Number(element.dataset[key]) - Number(box[['x', 'y', 'w', 'h'][index]])));
-        if (deltas.some(delta => !Number.isFinite(delta) || delta > 0.25)) continue;
+        if (deltas.some(delta => !Number.isFinite(delta) || delta > 6.0)) continue;
         const distance = deltas.reduce((sum, delta) => sum + delta * delta, 0);
         if (!best || distance < best.distance) best = { element, distance };
       }
@@ -874,6 +875,10 @@
     }
 
     function playBubbleVoice(pageIdx, box, text) {
+      // Если нажали на конкретный бабл, воспроизводим точно его реплику через мгновенный Deepgram
+      if (text && text.trim()) {
+        return playInstantDeepgramVoice(text).catch(error => alert(error.message || 'Не удалось запустить озвучку.'));
+      }
       const cachedBubble = findChapterBubble(pageIdx, box);
       if (isGeminiOfflineChapterVoiceover() && cachedBubble && chapterVoiceover.segments?.[cachedBubble.id]) {
         return playChapterVoiceoverSegment(pageIdx, box);
