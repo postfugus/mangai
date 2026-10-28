@@ -274,3 +274,37 @@ def save_cached_audio(text: str, audio_bytes: bytes, media_type: str, voice_tag:
         conn.close()
     except Exception as e:
         print(f"[!] Error saving audio_cache: {e}")
+
+
+def clear_offline_cache(manga_name: Optional[str] = None, filename: Optional[str] = None) -> Dict[str, int]:
+    """
+    Clears saved translations, bubble positions, and generated speech audio from SQLite database.
+    If manga_name/filename are provided, clears only for that specific chapter/manga.
+    Otherwise clears all offline data across the application.
+    """
+    init_db()
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    
+    deleted_counts = {}
+    if manga_name and filename:
+        cur.execute("DELETE FROM page_translations WHERE manga_name=? AND filename=?", (manga_name, filename))
+        deleted_counts["translations"] = cur.rowcount
+        cur.execute("DELETE FROM page_bubbles_cache WHERE manga_name=? AND filename=?", (manga_name, filename))
+        deleted_counts["bubbles"] = cur.rowcount
+    elif manga_name:
+        cur.execute("DELETE FROM page_translations WHERE manga_name=?", (manga_name,))
+        deleted_counts["translations"] = cur.rowcount
+        cur.execute("DELETE FROM page_bubbles_cache WHERE manga_name=?", (manga_name,))
+        deleted_counts["bubbles"] = cur.rowcount
+    else:
+        cur.execute("DELETE FROM page_translations")
+        deleted_counts["translations"] = cur.rowcount
+        cur.execute("DELETE FROM page_bubbles_cache")
+        deleted_counts["bubbles"] = cur.rowcount
+        cur.execute("DELETE FROM audio_cache")
+        deleted_counts["audio"] = cur.rowcount
+
+    conn.commit()
+    conn.close()
+    return deleted_counts

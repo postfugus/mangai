@@ -54,6 +54,12 @@
         <span class="sm:hidden">Скачать</span>
       </button>
 
+      <!-- Clear Offline Cache Button -->
+      <button onclick="clearAllCache()" class="btn btn-ghost btn-sm sm:btn-md gap-2 text-error font-bold" title="Очистить оффлайн-кэш">
+        <i class="fa-solid fa-trash-can"></i>
+        <span class="hidden md:inline">Очистить кэш</span>
+      </button>
+
       <!-- Theme Controller Dropdown -->
       <div class="dropdown dropdown-end">
         <div tabindex="0" role="button" class="btn btn-ghost btn-circle">
@@ -306,6 +312,19 @@
         alert('Ошибка: ' + err);
         submitBtn.disabled = false;
         submitBtn.innerHTML = '<i class="fa-solid fa-download mr-1"></i> Начать загрузку';
+      }
+    }
+
+    async function clearAllCache() {
+      if (!confirm('Вы уверены, что хотите удалить весь оффлайн-кэш (распознанные баблы, сохранённые переводы и озвучку)?')) {
+        return;
+      }
+      try {
+        const resp = await fetch('/api/clear-offline-cache', { method: 'POST' });
+        if (!resp.ok) throw new Error('Ошибка очистки: ' + resp.statusText);
+        alert('Локальный оффлайн-кэш полностью очищен!');
+      } catch (e) {
+        alert('Ошибка при очистке кэша: ' + e.message);
       }
     }
   </script>

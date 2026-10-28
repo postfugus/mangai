@@ -18,7 +18,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 from mangakawaii_scraper import MangaKawaiiClient
 from translator_service import MangaTranslatorService, MangaYOLOModel
-from db_cache import get_all_cached_translations_for_page, get_cached_audio, save_cached_audio, init_db, get_cached_page_bubbles, is_page_fully_translated, make_box_key
+from db_cache import get_all_cached_translations_for_page, get_cached_audio, save_cached_audio, clear_offline_cache, init_db, get_cached_page_bubbles, is_page_fully_translated, make_box_key
 
 app = FastAPI(title="Manga Smart Reader & Cloud Hub")
 
@@ -247,13 +247,64 @@ DEEPGRAM_VOICE_MODEL = os.environ.get("DEEPGRAM_VOICE_MODEL", "aura-2-hector-fr"
 DEEPGRAM_VOICE_TAG = f"deepgram_{DEEPGRAM_VOICE_MODEL}"
 
 
+def normalize_french_for_tts(text: str) -> str:
+    """
+    Normalizes manga speech text so Deepgram speaks in a continuous, natural cadence:
+    1. Glues OCR-broken and line-wrapped hyphenated words (e.g. 'MAIN-TENANT' -> 'maintenant').
+    2. Fixes spaced apostrophes and contractions (e.g. 'c ' est' -> 'c\'est', 'd \' un' -> 'd\'un').
+    3. Normalizes Comic ALL-CAPS font to standard sentence casing to prevent syllable-by-syllable or spelled-out delivery.
+    """
+    if not text:
+        return ""
+    
+    # Common legitimate French hyphenated words to preserve
+    legit_hyphens = {
+        "est-ce", "peut-être", "rendez-vous", "au-dessus", "au-dessous",
+        "celui-ci", "celle-ci", "ceux-ci", "celles-ci", "là-bas", "par-dessus"
+    }
+
+    # Rejoin line-wrap hyphens with space: "CONNAIS- SIEZ" -> "CONNAISSIEZ"
+    text = re.sub(r"([A-Za-zÀ-ÿ]{2,})-\s+([A-Za-zÀ-ÿ]{2,})", r"\1\2", text)
+
+    # Rejoin word-break hyphens: "MAIN-TENANT" -> "MAINTENANT"
+    def clean_hyphen(m):
+        full = m.group(0).lower()
+        if full in legit_hyphens or m.group(2).lower() in ["tu", "vous", "il", "elle", "ils", "elles", "on", "moi", "toi", "lui", "la", "le", "les", "ce", "en", "y"]:
+            return m.group(0)
+        return m.group(1) + m.group(2)
+
+    text = re.sub(r"([A-Za-zÀ-ÿ]{3,})-([A-Za-zÀ-ÿ]{3,})", clean_hyphen, text)
+
+    # Rejoin detached apostrophes: "C ' EST" -> "C'EST"
+    text = re.sub(r"([A-Za-zÀ-ÿ])\s*['’`]\s*([A-Za-zÀ-ÿ])", r"\1'\2", text)
+
+    # Collapse multiple spaces and newlines into a single clean space
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Convert ALL-CAPS manga lettering into natural sentence case
+    if text.isupper() and len(text) > 3:
+        parts = re.split(r"([.!?]+\s*)", text.lower())
+        cased = ""
+        for p in parts:
+            if p:
+                cased += p[0].upper() + p[1:] if len(p) > 1 else p.upper()
+        text = cased
+
+    return text
+
+
 def call_deepgram_tts(clean_text: str) -> bytes:
     """Synthesize speech strictly with Deepgram (aura-2-hector-fr) and return MP3 audio bytes."""
     if not DEEPGRAM_API_KEY:
         raise RuntimeError("DEEPGRAM_API_KEY is not configured")
 
+    # Pass fluent, natural French text into Deepgram
+    tts_text = normalize_french_for_tts(clean_text)
+    if not tts_text:
+        tts_text = clean_text
+
     url = f"https://api.deepgram.com/v1/speak?model={DEEPGRAM_VOICE_MODEL}"
-    payload = json.dumps({"text": clean_text}).encode("utf-8")
+    payload = json.dumps({"text": tts_text}).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=payload,
@@ -293,6 +344,19 @@ def voice_tts(text: str = Query(..., min_length=1), lang: str = Query("fr"), emo
     except Exception as e:
         print(f"[!] Deepgram speech error: {e}")
         raise HTTPException(status_code=502, detail=f"Deepgram speech synthesis failed: {e}")
+
+
+@app.post("/api/clear-offline-cache")
+def clear_offline_cache_endpoint(manga_name: Optional[str] = Query(None), filename: Optional[str] = Query(None)):
+    """
+    Clears local offline database (translations, bubbles, audio).
+    Can target an entire manga/chapter or completely wipe all local cache.
+    """
+    try:
+        stats = clear_offline_cache(manga_name, filename)
+        return {"status": "ok", "deleted": stats}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def bg_chapter_translation(task_id: str, req: BatchTranslateChapterRequest):

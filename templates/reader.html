@@ -227,6 +227,12 @@
         <span class="hidden sm:inline text-xs">Перевести всё</span>
       </button>
 
+      <!-- Clear Cache Button -->
+      <button onclick="clearCacheModal()" class="btn btn-sm btn-ghost text-error" title="Очистить оффлайн-кэш">
+        <i class="fa-solid fa-trash-can text-xs"></i>
+        <span class="hidden sm:inline text-xs">Очистить кэш</span>
+      </button>
+
       <!-- Reading Mode Switcher -->
       <button onclick="toggleReadingMode()" id="modeBtn" class="btn btn-ghost btn-circle btn-sm" title="Режим: Одиночный / Свиток">
         <i class="fa-solid fa-scroll text-primary text-sm"></i>
@@ -263,6 +269,11 @@
     <button onclick="replaceAllBubblesWithRussian(); closeEdgeMenu();" class="btn btn-ghost btn-sm gap-2 font-semibold justify-start text-xs">
       <i class="fa-solid fa-language text-xs"></i>
       <span>Заменить все баблы на русский</span>
+    </button>
+    
+    <button onclick="clearCacheModal(); closeEdgeMenu();" class="btn btn-ghost btn-sm gap-2 font-semibold justify-start text-xs text-error">
+      <i class="fa-solid fa-trash-can text-xs"></i>
+      <span>Очистить оффлайн-кэш</span>
     </button>
   </div>
 
@@ -369,6 +380,39 @@
         </button>
       </div>
     </div>
+  </dialog>
+
+  <!-- Clear Cache Confirmation Modal -->
+  <dialog id="clearCacheConfirmModal" class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box bg-base-100 border border-base-200 rounded-3xl p-5 max-w-sm">
+      <h3 class="font-extrabold text-base flex items-center gap-2 mb-2 text-error">
+        <i class="fa-solid fa-trash-can"></i>
+        <span>Очистить оффлайн-кэш?</span>
+      </h3>
+      <p class="text-xs text-base-content/70 mb-4 leading-relaxed">
+        Выберите, какой оффлайн-кэш вы хотите очистить: только для текущей главы или стереть все сохранённые переводы и озвучку.
+      </p>
+
+      <div class="flex flex-col gap-2">
+        <button onclick="executeClearCache('chapter')" class="btn btn-warning btn-sm justify-start gap-2 font-bold text-xs">
+          <i class="fa-solid fa-file-lines"></i>
+          <span>Только текущую главу</span>
+        </button>
+        <button onclick="executeClearCache('all')" class="btn btn-error btn-sm justify-start gap-2 font-bold text-xs">
+          <i class="fa-solid fa-dumpster-fire"></i>
+          <span>Очистить абсолютно всё</span>
+        </button>
+      </div>
+
+      <div class="modal-action mt-4">
+        <form method="dialog">
+          <button class="btn btn-ghost btn-xs">Отмена</button>
+        </form>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+      <button>закрыть</button>
+    </form>
   </dialog>
 
   <audio id="ttsAudio" controls preload="none" style="display:none"></audio>
@@ -1019,6 +1063,35 @@
         alert('Ошибка: ' + err);
         btn.disabled = false;
         btn.innerHTML = '<i class="fa-solid fa-play"></i> Запустить';
+      }
+    }
+
+    // ==================== CLEAR OFFLINE CACHE ====================
+
+    function clearCacheModal() {
+      document.getElementById('clearCacheConfirmModal').showModal();
+    }
+
+    async function executeClearCache(scope) {
+      document.getElementById('clearCacheConfirmModal').close();
+      let url = '/api/clear-offline-cache';
+      if (scope === 'chapter') {
+        url += `?manga_name=${encodeURIComponent(MANGA_NAME)}&filename=${encodeURIComponent(FILENAME)}`;
+      }
+
+      try {
+        const resp = await fetch(url, { method: 'POST' });
+        if (!resp.ok) throw new Error('Ошибка очистки кэша: ' + resp.statusText);
+        const data = await resp.json();
+        
+        // Очищаем текущие визуальные оверлеи баблов на экране
+        clearBubbles();
+        const rep = document.getElementById('replacementsLayer');
+        if (rep) rep.innerHTML = '';
+
+        alert(scope === 'chapter' ? 'Оффлайн-кэш текущей главы успешно очищен!' : 'Весь оффлайн-кэш успешно очищен!');
+      } catch (e) {
+        alert('Не удалось очистить кэш: ' + e.message);
       }
     }
 
