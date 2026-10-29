@@ -741,12 +741,16 @@
         el.querySelector('.bubble-emotion-mark')?.remove();
       });
       const matched = audioReadingItems.map((entry, index) => ({entry, index}));
-      matched.forEach(({entry, index}) => {
+      // Считаем локальные порядковые номера для текущей страницы
+      const pageEntries = matched.filter(({entry}) => Number(entry.page_idx) === Number(currentPageIdx));
+      pageEntries.forEach(({entry, index}, localIdx) => {
         const target = findRenderedBubble(bubbles, entry.page_idx, entry.box);
         if (!target) return;
         const badge = document.createElement('span');
         badge.className = 'audio-order-number';
-        badge.textContent = String(index + 1);
+        // Показываем локальный номер на странице (1, 2, 3...), а в подсказке полный глобальный номер
+        badge.textContent = String(localIdx + 1);
+        badge.title = `Реплика #${localIdx + 1} на странице (в главе #${index + 1})`;
         target.appendChild(badge);
         const emotionMarks = { joy: ['☺', 'Радость'], sadness: ['·', 'Грусть'], anger: ['⚡', 'Злость'], fear: ['!', 'Страх'], surprise: ['?', 'Удивление'], tenderness: ['♥', 'Нежность'], sarcasm: ['↗', 'Ирония'], whisper: ['…', 'Шёпот'] };
         if (emotionMarks[entry.emotion]) {
@@ -1033,20 +1037,28 @@
       const bubble = findChapterBubble(pageIdx, box);
       const timing = bubble && chapterVoiceover?.segments?.[bubble.id];
       if (timing && Number.isFinite(timing.start)) {
-        // Локальное непрерывное аудио главы: переходим на время бабла без обрезания
+        // Если аудиорежим ещё не был активен — включаем его полноценно, чтобы интерфейс,
+        // бейджи номеров и слежение по страницам синхронизировались
+        if (!audioReadingActive) {
+          audioReadingActive = true;
+          audioReadingItems = chapterVoiceover.bubbles;
+          document.getElementById('audioReadingControls').style.display = 'flex';
+          document.getElementById('audioModeLabel').textContent = 'Стоп';
+        }
+        const bIdx = chapterVoiceover.bubbles.findIndex(b => b.id === bubble.id);
+        if (bIdx >= 0) {
+          audioReadingIndex = bIdx;
+        }
         ensureChapterAudioLoaded().then(() => {
           const audio = document.getElementById('ttsAudio');
           audio.currentTime = Math.max(0, timing.start);
-          audio.ontimeupdate = onAudioTimelineProgress;
+          setupContinuousAudioSync();
           audio.volume = 1;
           audio.play();
           updateAudioPlayIcon(true);
-          const bubbles = Array.from(document.querySelectorAll('#replacementsLayer .in-bubble-replacement'));
-          bubbles.forEach(el => el.classList.remove('audio-current'));
-          const target = findRenderedBubble(bubbles, pageIdx, box);
-          if (target) target.classList.add('audio-current');
+          showCurrentAudioBubble(false);
         }).catch(err => {
-          playInstantDeepgramVoice(text).catch(e => alert(e.message || 'Не удалось воспроизвести.'));
+          console.warn('Playback error:', err);
         });
         return;
       }
