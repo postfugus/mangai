@@ -94,12 +94,25 @@
       animation: popIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
       user-select: none;
     }
+    /* Режим прозрачной подсветки для языка оригинала: манга остаётся видна, бабл прозрачный */
+    .in-bubble-replacement.original-transparent {
+      background: transparent !important;
+      border: 1.5px dashed rgba(249, 115, 22, 0.55) !important;
+      box-shadow: none !important;
+    }
+    .in-bubble-replacement.original-transparent:hover {
+      background: rgba(249, 115, 22, 0.12) !important;
+      border: 2px solid #f97316 !important;
+    }
     .in-bubble-replacement.translation-overflow {
       background: rgba(255, 255, 255, 0.98);
     }
     .in-bubble-replacement.audio-current {
       color: #9a3412;
       z-index: 32;
+      border: 2px solid #ea580c !important;
+      background: rgba(234, 88, 12, 0.22) !important;
+      box-shadow: 0 0 16px rgba(234, 88, 12, 0.7) !important;
     }
     .in-bubble-replacement.audio-current .in-bubble-text {
       text-decoration: underline;
@@ -382,6 +395,10 @@
 
   <div id="audioReadingControls" class="fixed bottom-[62px] inset-x-2 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 sm:w-[min(680px,calc(100vw-24px))] rounded-2xl border border-base-300 bg-base-100/95 shadow-xl px-2 py-2 items-center justify-between gap-2" style="display:none">
     <span id="audioLineCounter" class="badge badge-neutral font-bold whitespace-nowrap">0 / 0</span>
+    <select id="audioFlowMode" class="select select-bordered select-xs" aria-label="Режим прослушивания" onchange="setAudioFlowMode(this.value)" title="Режим воспроизведения аудио">
+      <option value="continuous">Поток (непрерывно)</option>
+      <option value="step">По репликам (шаг за шагом)</option>
+    </select>
     <select id="audioAnimationMode" class="select select-bordered select-xs" aria-label="Анимация реплики" onchange="showCurrentAudioBubble(false)">
       <option value="highlight">Только подсветка</option>
       <option value="zoom">Зум + подсветка</option>
@@ -507,6 +524,14 @@
     let chapterSegmentPlaybackId = 0;
     let showRussianTranslations = localStorage.getItem('mk-show-russian') === '1';
     let audioSyncTrackingEnabled = false;
+    let audioFlowMode = localStorage.getItem('mk-audio-flow-mode') || 'continuous';
+
+    function setAudioFlowMode(mode) {
+      audioFlowMode = mode;
+      localStorage.setItem('mk-audio-flow-mode', mode);
+      const sel = document.getElementById('audioFlowMode');
+      if (sel) sel.value = mode;
+    }
     document.addEventListener('DOMContentLoaded', () => {
       document.documentElement.setAttribute('data-theme', localStorage.getItem('mk-theme') || 'dark');
       initReader();
@@ -517,6 +542,8 @@
       slider.max = Math.max(0, PAGES_LIST.length - 1);
       const ruToggle = document.getElementById('showRussianToggle');
       if (ruToggle) ruToggle.checked = showRussianTranslations;
+      const flowSel = document.getElementById('audioFlowMode');
+      if (flowSel) flowSel.value = audioFlowMode;
       loadChapterTextStats();
       loadPage(0);
       setupSelectionHandlers();
@@ -607,10 +634,12 @@
       document.getElementById('showRussianToggle').checked = enabled;
       document.querySelectorAll('#replacementsLayer .in-bubble-replacement, .webtoon-page .in-bubble-replacement').forEach(el => {
         const textSpan = el.querySelector('.in-bubble-text');
-        if (textSpan) {
-          textSpan.innerText = enabled
-            ? (el.dataset.russianText || el.dataset.origText || '')
-            : (el.dataset.origText || el.dataset.russianText || '');
+        if (enabled) {
+          el.classList.remove('original-transparent');
+          if (textSpan) textSpan.innerText = el.dataset.russianText || el.dataset.origText || '';
+        } else {
+          el.classList.add('original-transparent');
+          if (textSpan) textSpan.innerText = '';
         }
         fitBubbleText(el, el.closest('.webtoon-page')?.querySelector('img') || document.getElementById('currentImage'));
       });
@@ -843,6 +872,16 @@
       const time = audio.currentTime;
       const segments = chapterVoiceover.segments || {};
 
+      // В пошаговом режиме (step) останавливаем аудио, когда текущая реплика подошла к концу
+      if (audioFlowMode === 'step' && audioReadingIndex >= 0 && audioReadingIndex < chapterVoiceover.bubbles.length) {
+        const curTiming = segments[chapterVoiceover.bubbles[audioReadingIndex]?.id];
+        if (curTiming && Number.isFinite(curTiming.end) && time >= curTiming.end) {
+          audio.pause();
+          updateAudioPlayIcon(false);
+          return;
+        }
+      }
+
       // Находим текущий активный бабл по точному времени аудиодорожки
       let matchedIdx = -1;
       for (let i = 0; i < chapterVoiceover.bubbles.length; i++) {
@@ -892,6 +931,11 @@
         const audio = document.getElementById('ttsAudio');
         if (timing && Number.isFinite(timing.start)) {
           audio.currentTime = Math.max(0, timing.start);
+          if (audioFlowMode === 'step' || !audio.paused) {
+            setupContinuousAudioSync();
+            audio.play().catch(e => console.warn(e));
+            updateAudioPlayIcon(true);
+          }
         }
         if (chapterVoiceover && item.page_idx !== currentPageIdx) {
           pendingAudioIndex = audioReadingIndex;
@@ -913,6 +957,11 @@
         const audio = document.getElementById('ttsAudio');
         if (timing && Number.isFinite(timing.start)) {
           audio.currentTime = Math.max(0, timing.start);
+          if (audioFlowMode === 'step' || !audio.paused) {
+            setupContinuousAudioSync();
+            audio.play().catch(e => console.warn(e));
+            updateAudioPlayIcon(true);
+          }
         }
         if (chapterVoiceover && item.page_idx !== currentPageIdx) {
           pendingAudioIndex = audioReadingIndex;
@@ -1310,6 +1359,18 @@
     function fitBubbleText(container, pageImg = document.getElementById('currentImage')) {
       const textSpan = container.querySelector('.in-bubble-text');
       if (!textSpan) return;
+      if (!showRussianTranslations || container.classList.contains('original-transparent')) {
+        const baseW = parseFloat(container.dataset.origW || container.style.width);
+        const baseH = parseFloat(container.dataset.origH || container.style.height);
+        const baseX = parseFloat(container.dataset.origX || container.style.left);
+        const baseY = parseFloat(container.dataset.origY || container.style.top);
+        container.style.width = baseW + '%';
+        container.style.height = baseH + '%';
+        container.style.left = baseX + '%';
+        container.style.top = baseY + '%';
+        textSpan.innerText = '';
+        return;
+      }
 
       const imgW = pageImg ? pageImg.clientWidth : (container.offsetParent ? container.offsetParent.clientWidth : window.innerWidth);
       const imgH = pageImg ? pageImg.clientHeight : (container.offsetParent ? container.offsetParent.clientHeight : window.innerHeight);
@@ -1472,10 +1533,14 @@
       
       const textSpan = document.createElement('span');
       textSpan.className = 'in-bubble-text';
-      // По умолчанию отображаем язык оригинала, если не включён русский
-      textSpan.innerText = showRussianTranslations
-        ? (data.natural || data.translated || data.original || '')
-        : (data.original || data.natural || data.translated || '');
+      // По умолчанию в режиме оригинала не перекрываем текст на манге непрозрачной плашкой:
+      // делаем бабл прозрачным с пунктирным контуром, а русский перевод включается в настройках
+      if (!showRussianTranslations) {
+        el.classList.add('original-transparent');
+        textSpan.innerText = '';
+      } else {
+        textSpan.innerText = data.natural || data.translated || data.original || '';
+      }
       el.appendChild(textSpan);
       const emotionMarks = {
         joy: ['☺', 'Радость'], sadness: ['·', 'Грусть'], anger: ['⚡', 'Злость'],
