@@ -94,31 +94,33 @@
       animation: popIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
       user-select: none;
     }
-    /* Режим прозрачной подсветки для языка оригинала: манга остаётся видна, бабл прозрачный */
+    /* Режим прозрачной подсветки для оригинала: манга и авторский леттеринг полностью видны, без обрамления */
     .in-bubble-replacement.original-transparent {
       background: transparent !important;
-      border: 1.5px dashed rgba(249, 115, 22, 0.55) !important;
+      border: none !important;
       box-shadow: none !important;
+      border-radius: 12px;
+      transition: background 0.2s ease, box-shadow 0.25s ease, filter 0.25s ease;
     }
     .in-bubble-replacement.original-transparent:hover {
-      background: rgba(249, 115, 22, 0.12) !important;
-      border: 2px solid #f97316 !important;
+      background: rgba(249, 115, 22, 0.08) !important;
+      border: none !important;
     }
     .in-bubble-replacement.translation-overflow {
       background: rgba(255, 255, 255, 0.98);
     }
+    /* Блюровая мягкая подсветка в режиме аудио: без рамок и без обрамления, текст не перекрыт */
     .in-bubble-replacement.audio-current {
-      color: #9a3412;
       z-index: 32;
-      border: 2px solid #ea580c !important;
-      background: rgba(234, 88, 12, 0.22) !important;
-      box-shadow: 0 0 16px rgba(234, 88, 12, 0.7) !important;
+      border: none !important;
+      background: rgba(249, 115, 22, 0.28) !important;
+      box-shadow: 0 0 24px 8px rgba(249, 115, 22, 0.45) !important;
+      backdrop-filter: blur(1.5px);
+      -webkit-backdrop-filter: blur(1.5px);
+      border-radius: 12px;
     }
     .in-bubble-replacement.audio-current .in-bubble-text {
-      text-decoration: underline;
-      text-decoration-color: rgba(249, 115, 22, 0.75);
-      text-decoration-thickness: 2px;
-      text-underline-offset: 2px;
+      text-decoration: none;
     }
     .bubble-emotion-mark {
       position: absolute; top: 1px; right: 2px; z-index: 34;
@@ -768,27 +770,6 @@
         el.classList.remove('audio-current');
         el.querySelector('.audio-order-number')?.remove();
         el.querySelector('.bubble-emotion-mark')?.remove();
-      });
-      const matched = audioReadingItems.map((entry, index) => ({entry, index}));
-      // Считаем локальные порядковые номера для текущей страницы
-      const pageEntries = matched.filter(({entry}) => Number(entry.page_idx) === Number(currentPageIdx));
-      pageEntries.forEach(({entry, index}, localIdx) => {
-        const target = findRenderedBubble(bubbles, entry.page_idx, entry.box);
-        if (!target) return;
-        const badge = document.createElement('span');
-        badge.className = 'audio-order-number';
-        // Показываем локальный номер на странице (1, 2, 3...), а в подсказке полный глобальный номер
-        badge.textContent = String(localIdx + 1);
-        badge.title = `Реплика #${localIdx + 1} на странице (в главе #${index + 1})`;
-        target.appendChild(badge);
-        const emotionMarks = { joy: ['☺', 'Радость'], sadness: ['·', 'Грусть'], anger: ['⚡', 'Злость'], fear: ['!', 'Страх'], surprise: ['?', 'Удивление'], tenderness: ['♥', 'Нежность'], sarcasm: ['↗', 'Ирония'], whisper: ['…', 'Шёпот'] };
-        if (emotionMarks[entry.emotion]) {
-          const mark = document.createElement('span');
-          mark.className = 'bubble-emotion-mark';
-          mark.textContent = emotionMarks[entry.emotion][0];
-          mark.title = `Jev: ${emotionMarks[entry.emotion][1]}`;
-          target.appendChild(mark);
-        }
       });
       const bubble = findRenderedBubble(bubbles, item.page_idx ?? currentPageIdx, item.box);
       document.getElementById('audioLineCounter').textContent = `${audioReadingIndex + 1} / ${audioReadingItems.length}`;
