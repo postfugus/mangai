@@ -700,7 +700,7 @@ def _whisper_model(model_name: str):
         return None
 
 
-def transcribe_and_align(audio: bytes, items: List[Dict], lang: str = "ru", model_name: str = "small") -> Tuple[Dict, float]:
+def transcribe_and_align(audio: bytes, items: List[Dict], lang: str = "ru", model_name: str = "tiny") -> Tuple[Dict, float]:
     with wave.open(io.BytesIO(audio), "rb") as wav_file:
         duration = wav_file.getnframes() / float(wav_file.getframerate())
     rms, frame_seconds = _audio_rms_envelope(audio)
