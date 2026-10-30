@@ -109,13 +109,15 @@ def multi_source_search(query: str, enabled_sources: List[str] = None) -> List[D
         return []
     
     q = query.strip()
-    sources = enabled_sources or ["mangadex", "mangakawaii"]
+    sources = enabled_sources or ["mangadex", "mangakawaii", "remanga"]
     combined = []
     
     if "mangadex" in sources:
         combined.extend(search_mangadex(q))
     if "mangakawaii" in sources:
         combined.extend(search_mangakawaii(q))
+    if "remanga" in sources:
+        combined.extend(search_remanga(q))
         
     return combined
 
@@ -124,3 +126,35 @@ if __name__ == "__main__":
     print(f"Multi-search returned {len(res)} results:")
     for r in res[:6]:
         print(f"[{r['source']}] {r['title']} -> {r['cover_url']}")
+
+def search_remanga(query: str, limit: int = 15) -> List[Dict[str, Any]]:
+    """Search manga across Remanga API (Russian scanlation)"""
+    try:
+        encoded = urllib.parse.quote(query)
+        url = f"https://api.remanga.org/api/search/?query={encoded}&count={limit}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        
+        results = []
+        for item in data.get("content", []):
+            dir_slug = item.get("dir")
+            title = item.get("rus_name") or item.get("en_name") or dir_slug
+            img = item.get("img", {}).get("high") or item.get("img", {}).get("mid") or ""
+            cover = f"https://remanga.org{img}" if img.startswith("/") else img
+            
+            results.append({
+                "source": "Remanga",
+                "source_id": "remanga",
+                "id": dir_slug,
+                "title": title,
+                "cover_url": cover,
+                "description": f"Русский перевод · Оценка: {item.get('avg_rating', '—')} ⭐",
+                "status": "ongoing",
+                "year": None,
+                "url": f"https://remanga.org/manga/{dir_slug}"
+            })
+        return results
+    except Exception as e:
+        print(f"[Remanga search error]: {e}")
+        return []
