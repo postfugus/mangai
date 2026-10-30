@@ -425,13 +425,14 @@ def save_cached_reading_order(manga_name: str, filename: str, page_idx: int, fin
 
 
 def get_cached_chapter_voiceover(manga_name: str, filename: str, fingerprint: Optional[str] = None,
-                                include_audio: bool = True, lang: str = "fr"):
+                                include_audio: bool = True, lang: Optional[str] = None):
     init_db()
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         fields = "fingerprint, audio_data, media_type, segments_json, bubbles_json, duration, voice, model, created_at, lang" if include_audio else "fingerprint, media_type, segments_json, bubbles_json, duration, voice, model, created_at, lang"
-        row = conn.execute(f"SELECT {fields} FROM chapter_voiceovers WHERE manga_name=? AND filename=? AND lang=?",
-                           (manga_name, filename, lang)).fetchone()
-        if not row:
+        if lang:
+            row = conn.execute(f"SELECT {fields} FROM chapter_voiceovers WHERE manga_name=? AND filename=? AND lang=?",
+                               (manga_name, filename, lang)).fetchone()
+        else:
             row = conn.execute(f"SELECT {fields} FROM chapter_voiceovers WHERE manga_name=? AND filename=? ORDER BY created_at DESC LIMIT 1",
                                (manga_name, filename)).fetchone()
     if not row or (fingerprint and row[0] != fingerprint):
@@ -447,7 +448,7 @@ def get_cached_chapter_voiceover(manga_name: str, filename: str, fingerprint: Op
         "segments": json.loads(row[offset]), "bubbles": json.loads(row[offset + 1]),
         "duration": row[offset + 2], "voice": row[offset + 3],
         "model": row[offset + 4], "created_at": row[offset + 5],
-        "lang": row[offset + 6] if len(row) > offset + 6 else lang,
+        "lang": row[offset + 6] if len(row) > offset + 6 else (lang or "fr"),
     }
 
 

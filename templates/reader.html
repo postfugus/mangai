@@ -585,22 +585,34 @@
       const audioSel = document.getElementById('audioLangSelect');
       if (audioSel) audioSel.value = currentVoiceLang;
 
-      // Highlight active in dropdown
+      // Highlight active in dropdown and reflect availability
       ['ru', 'fr', 'de', 'it', 'en'].forEach(code => {
         const opt = document.getElementById(`langOpt-${code}`);
+        const isCached = availableVoiceLangs.includes(code);
         if (opt) {
-          if (code === currentVoiceLang) opt.classList.add('active', 'font-bold');
-          else opt.classList.remove('active', 'font-bold');
+          if (code === currentVoiceLang) {
+            opt.classList.add('active', 'font-bold');
+          } else {
+            opt.classList.remove('active', 'font-bold');
+          }
+          if (isCached) {
+            opt.classList.remove('opacity-60');
+            opt.title = 'Озвучка скачана и готова к мгновенному прослушиванию';
+          } else {
+            opt.classList.add('opacity-60');
+            opt.title = 'Озвучка ещё не создана (при выборе можно сгенерировать аудиоглаву)';
+          }
         }
         const cachedBadge = document.getElementById(`cachedTag-${code}`);
         if (cachedBadge) {
-          if (availableVoiceLangs.includes(code)) {
-            cachedBadge.classList.remove('hidden');
-            cachedBadge.className = 'badge badge-xs badge-success text-[9px]';
-            cachedBadge.textContent = 'кэш';
+          if (isCached) {
+            cachedBadge.className = 'badge badge-xs badge-success text-[9px] font-bold';
+            cachedBadge.textContent = 'скачано';
           } else {
-            cachedBadge.classList.add('hidden');
+            cachedBadge.className = 'badge badge-xs badge-ghost text-[9px] opacity-70';
+            cachedBadge.textContent = 'создать';
           }
+          cachedBadge.classList.remove('hidden');
         }
       });
     }
@@ -1293,7 +1305,8 @@
     function playBubbleVoice(pageIdx, box, text) {
       const bubble = findChapterBubble(pageIdx, box);
       const timing = bubble && chapterVoiceover?.segments?.[bubble.id];
-      if (timing && Number.isFinite(timing.start)) {
+      // Проверяем, что кэшированная аудиоглава именно на выбранном языке currentVoiceLang
+      if (timing && Number.isFinite(timing.start) && chapterVoiceover?.lang === currentVoiceLang) {
         // Если аудиорежим ещё не был активен — включаем его полноценно, чтобы интерфейс,
         // бейджи номеров и слежение по страницам синхронизировались
         if (!audioReadingActive) {
@@ -1768,10 +1781,14 @@
         e.stopPropagation();
         // Start playback in the click event itself so browsers accept it as
         // a user gesture. Delaying for double-click detection blocks autoplay.
-        if (e.detail === 1 && data.original) {
+        if (e.detail === 1) {
           activeAudioBubble = { pageIdx, box };
-          activeAudioText = data.original;
-          playBubbleVoice(pageIdx, box, data.original);
+          let phraseToPlay = data.original || '';
+          if (currentVoiceLang === 'ru' && (data.natural || data.translated)) {
+            phraseToPlay = data.natural || data.translated;
+          }
+          activeAudioText = phraseToPlay;
+          playBubbleVoice(pageIdx, box, phraseToPlay);
         }
       });
 
