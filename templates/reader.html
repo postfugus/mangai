@@ -109,30 +109,30 @@
     .in-bubble-replacement.translation-overflow {
       background: rgba(255, 255, 255, 0.98);
     }
-    /* Мягкая подсветка в режиме аудио: без рамок, только блюровое свечение («дымок»/ореол) */
+    /* Мягкая подсветка в режиме аудио: БЕЗ рамок, только полупрозрачное растушёванное облачко/дымок */
     .in-bubble-replacement.audio-current {
       z-index: 38 !important;
-      border: 1.5px solid rgba(249, 115, 22, 0.75) !important;
-      background: radial-gradient(circle, rgba(249, 115, 22, 0.42) 0%, rgba(249, 115, 22, 0.18) 70%, transparent 100%) !important;
-      box-shadow: 0 0 28px 10px rgba(249, 115, 22, 0.55), inset 0 0 16px rgba(249, 115, 22, 0.35) !important;
-      border-radius: 14px;
-      animation: audioGlowPulse 1.6s ease-in-out infinite alternate;
+      border: none !important;
+      background: radial-gradient(ellipse at center, rgba(249, 115, 22, 0.32) 0%, rgba(249, 115, 22, 0.12) 65%, transparent 100%) !important;
+      box-shadow: 0 0 30px 12px rgba(249, 115, 22, 0.40) !important;
+      border-radius: 999px;
+      animation: audioCloudPulse 1.8s ease-in-out infinite alternate;
       pointer-events: auto !important;
     }
-    @keyframes audioGlowPulse {
+    @keyframes audioCloudPulse {
       0% {
-        box-shadow: 0 0 18px 6px rgba(249, 115, 22, 0.40), inset 0 0 8px rgba(249, 115, 22, 0.20);
-        background: radial-gradient(circle, rgba(249, 115, 22, 0.35) 0%, rgba(249, 115, 22, 0.12) 70%, transparent 100%);
+        box-shadow: 0 0 20px 8px rgba(249, 115, 22, 0.28);
+        background: radial-gradient(ellipse at center, rgba(249, 115, 22, 0.25) 0%, rgba(249, 115, 22, 0.08) 65%, transparent 100%);
       }
       100% {
-        box-shadow: 0 0 34px 14px rgba(249, 115, 22, 0.65), inset 0 0 20px rgba(249, 115, 22, 0.45);
-        background: radial-gradient(circle, rgba(249, 115, 22, 0.50) 0%, rgba(249, 115, 22, 0.22) 70%, transparent 100%);
+        box-shadow: 0 0 38px 16px rgba(249, 115, 22, 0.52);
+        background: radial-gradient(ellipse at center, rgba(249, 115, 22, 0.38) 0%, rgba(249, 115, 22, 0.15) 65%, transparent 100%);
       }
     }
     .in-bubble-replacement.audio-current.original-transparent {
-      background: radial-gradient(circle, rgba(249, 115, 22, 0.42) 0%, rgba(249, 115, 22, 0.18) 70%, transparent 100%) !important;
-      border: 1.5px solid rgba(249, 115, 22, 0.75) !important;
-      box-shadow: 0 0 28px 10px rgba(249, 115, 22, 0.55), inset 0 0 16px rgba(249, 115, 22, 0.35) !important;
+      background: radial-gradient(ellipse at center, rgba(249, 115, 22, 0.32) 0%, rgba(249, 115, 22, 0.12) 65%, transparent 100%) !important;
+      border: none !important;
+      box-shadow: 0 0 30px 12px rgba(249, 115, 22, 0.40) !important;
     }
     .in-bubble-replacement.audio-current .in-bubble-text {
       text-decoration: none;
