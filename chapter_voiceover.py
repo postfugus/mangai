@@ -696,3 +696,111 @@ def transcribe_and_align(audio: bytes, items: List[Dict], model_name: str = "sma
         print("[*] faster-whisper is not installed. Using acoustic RMS & proportional alignment.")
 
     return align_bubbles_to_words(items, words, duration, rms, frame_seconds), duration
+
+def mp3_to_wav_bytes(mp3_bytes: bytes) -> bytes:
+    """Converts MP3 audio bytes to linear PCM WAV bytes using miniaudio."""
+    import miniaudio, wave, io
+    decoded = miniaudio.mp3_read_s16(mp3_bytes)
+    wav_io = io.BytesIO()
+    with wave.open(wav_io, 'wb') as wav:
+        wav.setnchannels(decoded.nchannels)
+        wav.setsampwidth(2)
+        wav.setframerate(decoded.sample_rate)
+        wav.writeframes(decoded.samples)
+    return wav_io.getvalue()
+
+
+def synthesize_bubble_multilingual(text: str, lang: str = 'ru', api_key: str = '') -> Tuple[bytes, str]:
+    """
+    Instant single bubble voiceover.
+    Supports 'ru', 'de', 'it', 'fr', 'en'.
+    For French, uses Deepgram aura-2-hector-fr if key available.
+    For Russian, German, Italian (and fallback), uses Google neural TTS (gTTS) converted to WAV.
+    """
+    clean = text.strip()
+    if not clean:
+        raise ValueError("Empty text")
+
+    lang = (lang or 'ru').lower()
+    if lang == 'fr' and api_key:
+        try:
+            res = requests.post(
+                "https://api.deepgram.com/v1/speak",
+                params={"model": "aura-2-hector-fr", "encoding": "linear16", "container": "wav"},
+                headers={"Authorization": f"Token {api_key}"}, json={"text": clean}, timeout=(10, 60))
+            if res.ok and res.content.startswith(b"RIFF"):
+                return res.content, "audio/wav"
+        except Exception:
+            pass
+
+    from gtts import gTTS
+    import io
+    gtts_lang = 'ru'
+    if lang.startswith('de'):
+        gtts_lang = 'de'
+    elif lang.startswith('it'):
+        gtts_lang = 'it'
+    elif lang.startswith('fr'):
+        gtts_lang = 'fr'
+    elif lang.startswith('en'):
+        gtts_lang = 'en'
+    elif lang.startswith('ru'):
+        gtts_lang = 'ru'
+    else:
+        gtts_lang = lang[:2]
+
+    tts = gTTS(text=clean, lang=gtts_lang)
+    fp = io.BytesIO()
+    tts.write_to_fp(fp)
+    mp3_data = fp.getvalue()
+    wav_data = mp3_to_wav_bytes(mp3_data)
+    return wav_data, "audio/wav"
+
+
+def synthesize_chapter_multilingual(
+    items: List[Dict],
+    lang: str = 'ru',
+    api_key: str = '',
+    on_progress: Optional[Callable[[int, int], None]] = None
+) -> Tuple[bytes, Dict[str, Dict[str, float]], float]:
+    """
+    Synthesizes a full chapter with speech for all speech bubbles in the requested language.
+    Produces a single continuous WAV audio stream and exact timing segments for each bubble.
+    """
+    lang = (lang or 'ru').lower()
+    audio_blocks = []
+    durations = []
+    pause_ms = 220
+    
+    total = len(items)
+    for idx, item in enumerate(items):
+        if lang in {'ru', 'rus'}:
+            text = (item.get('natural') or item.get('translated') or item.get('original') or '').strip()
+        else:
+            text = (item.get('original') or item.get('natural') or item.get('translated') or '').strip()
+            
+        if not text:
+            text = '...'
+
+        wav_bytes, _ = synthesize_bubble_multilingual(text, lang=lang, api_key=api_key)
+        audio_blocks.append(wav_bytes)
+        with wave.open(io.BytesIO(wav_bytes), 'rb') as w:
+            dur = w.getnframes() / float(w.getframerate())
+            durations.append(dur)
+        if on_progress:
+            on_progress(idx + 1, total)
+
+    combined_wav = _combine_wav_chunks(audio_blocks, pause_ms=pause_ms)
+    pause_sec = pause_ms / 1000.0
+    segments = {}
+    current_time = 0.0
+
+    for idx, item in enumerate(items):
+        dur = durations[idx]
+        start_t = round(current_time, 3)
+        end_t = round(current_time + dur, 3)
+        segments[item['id']] = {'start': start_t, 'end': end_t}
+        current_time += dur + pause_sec
+
+    total_duration = round(current_time - pause_sec if current_time > pause_sec else current_time, 3)
+    return combined_wav, segments, total_duration

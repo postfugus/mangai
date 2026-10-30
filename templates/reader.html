@@ -293,9 +293,27 @@
 
     <!-- Right Controls -->
     <div class="flex items-center gap-1.5">
-      <div class="badge badge-primary badge-outline text-[11px] font-bold gap-1 py-2.5 hidden sm:inline-flex">
-        <i class="fa-solid fa-microphone-lines"></i>
-        <span>Мужской ИИ-голос</span>
+      <!-- Detected Original Language Badge -->
+      <div id="detectedLangBadge" class="badge badge-neutral badge-outline text-[11px] font-semibold gap-1 py-2.5 hidden md:inline-flex" title="Оригинальный язык манги">
+        <i class="fa-solid fa-earth-europe text-primary text-xs"></i>
+        <span id="detectedLangText">Определение языка...</span>
+      </div>
+
+      <!-- Voiceover Language Dropdown -->
+      <div class="dropdown dropdown-end">
+        <div tabindex="0" role="button" class="btn btn-ghost btn-sm px-2 gap-1 font-bold text-xs" title="Язык озвучки">
+          <i class="fa-solid fa-microphone-lines text-primary text-xs"></i>
+          <span id="voiceLangLabel">RU</span>
+          <i class="fa-solid fa-chevron-down text-[9px] opacity-60"></i>
+        </div>
+        <ul tabindex="0" class="dropdown-content z-[60] menu p-1.5 shadow-2xl bg-base-200 rounded-xl w-48 border border-base-300 mt-1 text-xs">
+          <li class="menu-title font-bold text-[10px] uppercase opacity-60 py-1">Язык озвучки</li>
+          <li><a onclick="changeVoiceLang('ru')" id="langOpt-ru" class="flex justify-between py-1.5"><span>🇷🇺 Русский</span><span id="cachedTag-ru" class="badge badge-xs hidden">кэш</span></a></li>
+          <li><a onclick="changeVoiceLang('fr')" id="langOpt-fr" class="flex justify-between py-1.5"><span>🇫🇷 Французский</span><span id="cachedTag-fr" class="badge badge-xs hidden">кэш</span></a></li>
+          <li><a onclick="changeVoiceLang('de')" id="langOpt-de" class="flex justify-between py-1.5"><span>🇩🇪 Немецкий</span><span id="cachedTag-de" class="badge badge-xs hidden">кэш</span></a></li>
+          <li><a onclick="changeVoiceLang('it')" id="langOpt-it" class="flex justify-between py-1.5"><span>🇮🇹 Итальянский</span><span id="cachedTag-it" class="badge badge-xs hidden">кэш</span></a></li>
+          <li><a onclick="changeVoiceLang('en')" id="langOpt-en" class="flex justify-between py-1.5"><span>🇬🇧 Английский</span><span id="cachedTag-en" class="badge badge-xs hidden">кэш</span></a></li>
+        </ul>
       </div>
 
       <!-- Pre-translate Chapter Button -->
@@ -405,6 +423,13 @@
     <select id="audioFlowMode" class="select select-bordered select-xs" aria-label="Режим прослушивания" onchange="setAudioFlowMode(this.value)" title="Режим воспроизведения аудио">
       <option value="continuous">Поток (непрерывно)</option>
       <option value="step">По репликам (шаг за шагом)</option>
+    </select>
+    <select id="audioLangSelect" class="select select-bordered select-xs font-semibold" aria-label="Язык озвучки" onchange="changeVoiceLang(this.value)" title="Выбрать язык озвучки">
+      <option value="ru">🇷🇺 RU</option>
+      <option value="fr">🇫🇷 FR</option>
+      <option value="de">🇩🇪 DE</option>
+      <option value="it">🇮🇹 IT</option>
+      <option value="en">🇬🇧 EN</option>
     </select>
     <select id="audioAnimationMode" class="select select-bordered select-xs" aria-label="Анимация реплики" onchange="showCurrentAudioBubble(false)">
       <option value="highlight">Только подсветка</option>
@@ -541,6 +566,97 @@
     let showRussianTranslations = localStorage.getItem('mk-show-russian') === '1';
     let audioSyncTrackingEnabled = false;
     let audioFlowMode = localStorage.getItem('mk-audio-flow-mode') || 'continuous';
+    let currentVoiceLang = localStorage.getItem('mk-voice-lang') || 'ru';
+    let detectedMangaLang = null;
+    let availableVoiceLangs = [];
+
+    const LANG_LABELS = {
+      ru: { code: 'ru', short: 'RU', title: '🇷🇺 Русский' },
+      fr: { code: 'fr', short: 'FR', title: '🇫🇷 Французский' },
+      de: { code: 'de', short: 'DE', title: '🇩🇪 Немецкий' },
+      it: { code: 'it', short: 'IT', title: '🇮🇹 Итальянский' },
+      en: { code: 'en', short: 'EN', title: '🇬🇧 Английский' }
+    };
+
+    function updateVoiceLangUI() {
+      const cfg = LANG_LABELS[currentVoiceLang] || LANG_LABELS['ru'];
+      const lbl = document.getElementById('voiceLangLabel');
+      if (lbl) lbl.textContent = cfg.short;
+      const audioSel = document.getElementById('audioLangSelect');
+      if (audioSel) audioSel.value = currentVoiceLang;
+
+      // Highlight active in dropdown
+      ['ru', 'fr', 'de', 'it', 'en'].forEach(code => {
+        const opt = document.getElementById(`langOpt-${code}`);
+        if (opt) {
+          if (code === currentVoiceLang) opt.classList.add('active', 'font-bold');
+          else opt.classList.remove('active', 'font-bold');
+        }
+        const cachedBadge = document.getElementById(`cachedTag-${code}`);
+        if (cachedBadge) {
+          if (availableVoiceLangs.includes(code)) {
+            cachedBadge.classList.remove('hidden');
+            cachedBadge.className = 'badge badge-xs badge-success text-[9px]';
+            cachedBadge.textContent = 'кэш';
+          } else {
+            cachedBadge.classList.add('hidden');
+          }
+        }
+      });
+    }
+
+    async function changeVoiceLang(lang) {
+      if (!LANG_LABELS[lang]) return;
+      currentVoiceLang = lang;
+      localStorage.setItem('mk-voice-lang', lang);
+      updateVoiceLangUI();
+
+      // Reset cached audio playback element for clean switch
+      const audio = document.getElementById('ttsAudio');
+      if (audio) {
+        audio.pause();
+        audio.ontimeupdate = null;
+      }
+      if (chapterVoiceoverObjectUrl) {
+        URL.revokeObjectURL(chapterVoiceoverObjectUrl);
+        chapterVoiceoverObjectUrl = '';
+      }
+      chapterVoiceover = null;
+      const btn = document.getElementById('chapterVoiceoverBtn');
+      if (btn) {
+        btn.classList.remove('btn-success');
+        btn.title = `Собрать аудиоглаву (${(LANG_LABELS[lang] || {}).title || lang})`;
+      }
+
+      await loadChapterVoiceoverStatus();
+      if (audioReadingActive) {
+        // If audio mode is playing, update items and continuous sync
+        if (chapterVoiceover?.bubbles?.length) {
+          audioReadingItems = chapterVoiceover.bubbles;
+          renderAudioBadges();
+        }
+      }
+    }
+
+    async function detectChapterLanguage() {
+      const badge = document.getElementById('detectedLangBadge');
+      const text = document.getElementById('detectedLangText');
+      try {
+        const url = `/api/detect-language/${encodeURIComponent(MANGA_NAME)}/${encodeURIComponent(FILENAME)}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        detectedMangaLang = data;
+        if (data && data.primary_language) {
+          const pct = Math.round((data.confidence || 0) * 100);
+          text.textContent = `Оригинал: ${data.primary_language_label || data.primary_language}${pct > 0 ? ` (${pct}%)` : ''}`;
+          badge.title = `Язык манги: ${data.primary_language_label} (уверенность: ${pct}%).\nОригинальный фрагмент: "${data.sample_text || ''}"`;
+          badge.classList.remove('hidden');
+        }
+      } catch (err) {
+        console.warn('Не удалось определить исходный язык манги:', err);
+      }
+    }
 
     function setAudioFlowMode(mode) {
       audioFlowMode = mode;
@@ -560,6 +676,8 @@
       if (ruToggle) ruToggle.checked = showRussianTranslations;
       const flowSel = document.getElementById('audioFlowMode');
       if (flowSel) flowSel.value = audioFlowMode;
+      updateVoiceLangUI();
+      detectChapterLanguage();
       loadChapterTextStats();
       loadPage(0);
       setupSelectionHandlers();
@@ -1047,7 +1165,7 @@
     }
 
     function chapterVoiceoverUrl() {
-      return `/api/chapter-voiceover/${encodeURIComponent(MANGA_NAME)}/${encodeURIComponent(FILENAME)}`;
+      return `/api/chapter-voiceover/${encodeURIComponent(MANGA_NAME)}/${encodeURIComponent(FILENAME)}?lang=${encodeURIComponent(currentVoiceLang)}`;
     }
 
     function findChapterBubble(pageIdx, box) {
@@ -1105,10 +1223,18 @@
         const response = await fetch(chapterVoiceoverUrl());
         if (!response.ok) return;
         const data = await response.json();
+        if (Array.isArray(data.available_versions)) {
+          availableVoiceLangs = data.available_versions;
+          updateVoiceLangUI();
+        }
         if (data.status === 'ready') {
           chapterVoiceover = data;
           const button = document.getElementById('chapterVoiceoverBtn');
-          if (button) { button.classList.add('btn-success'); button.title = `Аудиоглава готова · ${Math.round(data.duration / 60)} мин`; }
+          if (button) {
+            button.classList.add('btn-success');
+            const langName = (LANG_LABELS[currentVoiceLang] || {}).short || currentVoiceLang.toUpperCase();
+            button.title = `Аудиоглава готова (${langName}) · ${Math.round(data.duration / 60)} мин`;
+          }
         }
       } catch (error) { console.warn('Не удалось проверить локальную аудиоглаву:', error); }
     }
@@ -1136,7 +1262,7 @@
       const requestId = ++instantPlayRequestId;
       const response = await fetch('/api/instant-voice', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: clean })
+        body: JSON.stringify({ text: clean, lang: currentVoiceLang })
       });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));

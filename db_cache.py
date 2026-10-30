@@ -77,6 +77,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS chapter_voiceovers (
         manga_name TEXT NOT NULL,
         filename TEXT NOT NULL,
+        lang TEXT NOT NULL DEFAULT 'fr',
         fingerprint TEXT NOT NULL,
         audio_data BLOB NOT NULL,
         media_type TEXT NOT NULL,
@@ -86,7 +87,7 @@ def init_db():
         voice TEXT NOT NULL,
         model TEXT NOT NULL,
         created_at REAL NOT NULL,
-        PRIMARY KEY(manga_name, filename)
+        PRIMARY KEY(manga_name, filename, lang)
     )
     """)
     cur.execute("""
@@ -103,12 +104,13 @@ def init_db():
     CREATE TABLE IF NOT EXISTS chapter_voiceover_audio_staging (
         manga_name TEXT NOT NULL,
         filename TEXT NOT NULL,
+        lang TEXT NOT NULL DEFAULT 'fr',
         fingerprint TEXT NOT NULL,
         audio_data BLOB NOT NULL,
         media_type TEXT NOT NULL,
         model TEXT NOT NULL DEFAULT '',
         created_at REAL NOT NULL,
-        PRIMARY KEY(manga_name, filename)
+        PRIMARY KEY(manga_name, filename, lang)
     )
     """)
     staging_columns = {row[1] for row in cur.execute("PRAGMA table_info(chapter_voiceover_audio_staging)")}
@@ -423,12 +425,15 @@ def save_cached_reading_order(manga_name: str, filename: str, page_idx: int, fin
 
 
 def get_cached_chapter_voiceover(manga_name: str, filename: str, fingerprint: Optional[str] = None,
-                                include_audio: bool = True):
+                                include_audio: bool = True, lang: str = "fr"):
     init_db()
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
-        fields = "fingerprint, audio_data, media_type, segments_json, bubbles_json, duration, voice, model, created_at" if include_audio else "fingerprint, media_type, segments_json, bubbles_json, duration, voice, model, created_at"
-        row = conn.execute(f"SELECT {fields} FROM chapter_voiceovers WHERE manga_name=? AND filename=?",
-                           (manga_name, filename)).fetchone()
+        fields = "fingerprint, audio_data, media_type, segments_json, bubbles_json, duration, voice, model, created_at, lang" if include_audio else "fingerprint, media_type, segments_json, bubbles_json, duration, voice, model, created_at, lang"
+        row = conn.execute(f"SELECT {fields} FROM chapter_voiceovers WHERE manga_name=? AND filename=? AND lang=?",
+                           (manga_name, filename, lang)).fetchone()
+        if not row:
+            row = conn.execute(f"SELECT {fields} FROM chapter_voiceovers WHERE manga_name=? AND filename=? ORDER BY created_at DESC LIMIT 1",
+                               (manga_name, filename)).fetchone()
     if not row or (fingerprint and row[0] != fingerprint):
         return None
     if include_audio:
@@ -442,56 +447,69 @@ def get_cached_chapter_voiceover(manga_name: str, filename: str, fingerprint: Op
         "segments": json.loads(row[offset]), "bubbles": json.loads(row[offset + 1]),
         "duration": row[offset + 2], "voice": row[offset + 3],
         "model": row[offset + 4], "created_at": row[offset + 5],
+        "lang": row[offset + 6] if len(row) > offset + 6 else lang,
     }
+
+
+def list_cached_chapter_voiceovers(manga_name: str, filename: str) -> List[Dict]:
+    """Return all available localized voiceovers for this chapter."""
+    init_db()
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        rows = conn.execute(
+            "SELECT lang, voice, model, duration, created_at FROM chapter_voiceovers WHERE manga_name=? AND filename=? ORDER BY created_at DESC",
+            (manga_name, filename)
+        ).fetchall()
+    return [{"lang": r[0], "voice": r[1], "model": r[2], "duration": r[3], "created_at": r[4]} for r in rows]
 
 
 def save_cached_chapter_voiceover(manga_name: str, filename: str, fingerprint: str,
                                   audio_data: bytes, media_type: str, segments: Dict,
-                                  bubbles: List[Dict], duration: float, voice: str, model: str):
+                                  bubbles: List[Dict], duration: float, voice: str, model: str,
+                                  lang: str = "fr"):
     init_db()
     with sqlite3.connect(DB_PATH, timeout=30) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO chapter_voiceovers "
-            "(manga_name, filename, fingerprint, audio_data, media_type, segments_json, bubbles_json, duration, voice, model, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (manga_name, filename, fingerprint, audio_data, media_type,
+            "(manga_name, filename, lang, fingerprint, audio_data, media_type, segments_json, bubbles_json, duration, voice, model, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (manga_name, filename, lang, fingerprint, audio_data, media_type,
              json.dumps(segments, ensure_ascii=False), json.dumps(bubbles, ensure_ascii=False),
              duration, voice, model, time.time()),
         )
         conn.commit()
 
 
-def get_staged_chapter_voiceover_audio(manga_name: str, filename: str, fingerprint: str, model: str):
+def get_staged_chapter_voiceover_audio(manga_name: str, filename: str, fingerprint: str, model: str, lang: str = "fr"):
     """Return chapter audio saved before local alignment, if it matches this text revision."""
     init_db()
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         row = conn.execute(
             "SELECT audio_data, media_type FROM chapter_voiceover_audio_staging "
-            "WHERE manga_name=? AND filename=? AND fingerprint=? AND model=?",
-            (manga_name, filename, fingerprint, model),
+            "WHERE manga_name=? AND filename=? AND lang=? AND fingerprint=? AND model=?",
+            (manga_name, filename, lang, fingerprint, model),
         ).fetchone()
     return (row[0], row[1]) if row else None
 
 
 def save_staged_chapter_voiceover_audio(manga_name: str, filename: str, fingerprint: str,
-                                        audio_data: bytes, media_type: str, model: str):
+                                        audio_data: bytes, media_type: str, model: str, lang: str = "fr"):
     """Persist generated TTS before Whisper so alignment retries never spend TTS quota again."""
     init_db()
     with sqlite3.connect(DB_PATH, timeout=30) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO chapter_voiceover_audio_staging "
-            "(manga_name, filename, fingerprint, audio_data, media_type, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (manga_name, filename, fingerprint, audio_data, media_type, model, time.time()),
+            "(manga_name, filename, lang, fingerprint, audio_data, media_type, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (manga_name, filename, lang, fingerprint, audio_data, media_type, model, time.time()),
         )
         conn.commit()
 
 
-def delete_staged_chapter_voiceover_audio(manga_name: str, filename: str, fingerprint: str):
+def delete_staged_chapter_voiceover_audio(manga_name: str, filename: str, fingerprint: str, lang: str = "fr"):
     init_db()
     with sqlite3.connect(DB_PATH, timeout=10) as conn:
         conn.execute(
-            "DELETE FROM chapter_voiceover_audio_staging WHERE manga_name=? AND filename=? AND fingerprint=?",
-            (manga_name, filename, fingerprint),
+            "DELETE FROM chapter_voiceover_audio_staging WHERE manga_name=? AND filename=? AND lang=? AND fingerprint=?",
+            (manga_name, filename, lang, fingerprint),
         )
         conn.commit()
 
