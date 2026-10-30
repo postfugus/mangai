@@ -33,7 +33,7 @@ from db_cache import (get_all_cached_translations_for_page, init_db, get_cached_
                       save_cached_chapter_voiceover_tts_chunk,
                       delete_cached_chapter_voiceover_tts_chunks, clear_offline_cache)
 from keiyoushi_catalog import parse_keiyoushi_index
-from manga_sources import multi_source_search, search_mangadex, search_mangakawaii, get_manga_details_and_chapters
+from manga_sources import multi_source_search, search_mangadex, search_mangakawaii, get_manga_details_and_chapters, get_chapter_pages
 from db_cache import (get_favorites_library, toggle_favorite_manga, is_manga_in_library,
                       get_enabled_sources_list, set_source_enabled_state)
 from chapter_voiceover import (DEEPGRAM_TTS_MODEL, GEMINI_FRENCH_MALE_VOICE,
@@ -200,6 +200,84 @@ self.addEventListener("fetch", event => {
   }
 });'''
     return Response(script, media_type="application/javascript", headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
+@app.get("/api/proxy-image")
+def proxy_image(url: str = Query(...)):
+    """
+    Proxies external manga chapter images with necessary Referer and User-Agent headers
+    to bypass hotlinking protections (e.g. Remanga, MangaDex, MangaKawaii).
+    """
+    if not url.startswith("http://") and not url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Invalid URL protocol")
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+    }
+    if "remanga" in url or "reimg" in url:
+        headers["Referer"] = "https://remanga.org"
+        headers["Origin"] = "https://remanga.org"
+    elif "mangadex" in url:
+        headers["Referer"] = "https://mangadex.org"
+    elif "mangakawaii" in url:
+        headers["Referer"] = "https://www.mangakawaii.io"
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content_type = resp.headers.get("Content-Type") or "image/jpeg"
+            data = resp.read()
+            return Response(
+                content=data,
+                media_type=content_type,
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Image fetch error: {e}")
+
+
+@app.get("/online-reader/{source_id}/{manga_id}/{chapter_id}", response_class=HTMLResponse)
+def online_reader_page(request: Request, source_id: str, manga_id: str, chapter_id: str):
+    """
+    Online Mihon-style reader for direct chapter reading from MangaDex, Remanga, MangaKawaii
+    without downloading local CBZ first.
+    """
+    pages = get_chapter_pages(source_id, manga_id, chapter_id)
+    if not pages:
+        raise HTTPException(status_code=404, detail="Не удалось получить страницы главы из источника")
+
+    # Fetch manga details to get all chapters for dropdown navigation
+    details = get_manga_details_and_chapters(source_id, manga_id)
+    manga_title = details.get("title") or manga_id
+    all_chapters = []
+    current_chapter_title = f"Глава {chapter_id}"
+    for ch in details.get("chapters", []):
+        ch_id = str(ch.get("id"))
+        ch_title = ch.get("title") or f"Глава {ch_id}"
+        if ch_id == str(chapter_id):
+            current_chapter_title = ch_title
+        all_chapters.append({
+            "filename": ch_title,
+            "chapter_id": ch_id,
+            "url": f"/online-reader/{source_id}/{manga_id}/{ch_id}",
+            "size_mb": "онлайн"
+        })
+
+    return templates.TemplateResponse(
+        request=request,
+        name="reader.html",
+        context={
+            "manga_name": manga_title,
+            "filename": current_chapter_title,
+            "pages_list": pages,
+            "all_chapters": all_chapters,
+            "is_online": True,
+            "source_id": source_id,
+            "manga_id": manga_id,
+            "chapter_id": chapter_id
+        }
+    )
 
 
 @app.get("/reader/{manga_name}/{filename}", response_class=HTMLResponse)

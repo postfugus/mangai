@@ -293,3 +293,54 @@ def get_manga_details_and_chapters(source_id: str, manga_id: str) -> Dict[str, A
             return {"error": str(e), "chapters": []}
 
     return {"error": "Unsupported source", "chapters": []}
+
+def get_chapter_pages(source_id: str, manga_id: str, chapter_id: str) -> List[str]:
+    """
+    Fetch live image URLs for a chapter across MangaDex, Remanga, or MangaKawaii
+    """
+    if source_id == "mangadex":
+        try:
+            url = f"https://api.mangadex.org/at-home/server/{chapter_id}"
+            req = urllib.request.Request(url, headers={"User-Agent": "MangaKawaiiApp/1.0"})
+            with urllib.request.urlopen(req, timeout=12) as r:
+                data = json.loads(r.read().decode())
+            base = data["baseUrl"]
+            ch_hash = data["chapter"]["hash"]
+            pages = data["chapter"]["data"]
+            return [f"{base}/data/{ch_hash}/{p}" for p in pages]
+        except Exception as e:
+            print(f"[MangaDex pages error]: {e}")
+            return []
+
+    elif source_id == "remanga":
+        try:
+            url = f"https://api.remanga.org/api/titles/chapters/{chapter_id}/"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode())
+            raw_pages = data.get("content", {}).get("pages", [])
+            urls = []
+            for sub in raw_pages:
+                if isinstance(sub, list):
+                    for item in sub:
+                        if isinstance(item, dict) and item.get("link"):
+                            urls.append(item["link"])
+                elif isinstance(sub, dict) and sub.get("link"):
+                    urls.append(sub["link"])
+            return urls
+        except Exception as e:
+            print(f"[Remanga pages error]: {e}")
+            return []
+
+    elif source_id == "mangakawaii":
+        try:
+            from mangakawaii_scraper import MangaKawaiiClient
+            c = MangaKawaiiClient()
+            # chapter_id is chapter number or url
+            pages = c.get_chapter_pages(manga_id, chapter_id)
+            return pages
+        except Exception as e:
+            print(f"[MangaKawaii pages error]: {e}")
+            return []
+
+    return []

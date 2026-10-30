@@ -60,38 +60,40 @@
 <body class="bg-base-300 text-base-content min-h-screen flex flex-col font-sans selection:bg-primary selection:text-primary-content">
 
   <!-- Navbar -->
-  <div class="navbar bg-base-100 shadow-lg sticky top-0 z-50 px-4 sm:px-8 border-b border-base-200">
-    <div class="flex-1">
-      <a href="/" class="btn btn-ghost text-xl normal-case gap-2 font-extrabold tracking-tight">
-        <i class="fa-solid fa-book-open-reader text-primary text-2xl"></i>
+  <div class="navbar bg-base-100 shadow-md sticky top-0 z-50 px-2 sm:px-6 border-b border-base-200">
+    <div class="flex-1 min-w-0">
+      <a href="/" class="btn btn-ghost px-2 text-lg sm:text-xl normal-case gap-1.5 sm:gap-2 font-extrabold tracking-tight">
+        <i class="fa-solid fa-book-open-reader text-primary text-xl sm:text-2xl"></i>
         <span>Manga<span class="text-primary">Reader</span></span>
       </a>
     </div>
-    <div class="flex-none gap-2">
-      <!-- Stats Badge -->
-      <div class="badge badge-primary badge-outline gap-1 font-semibold py-3 px-4 hidden sm:inline-flex">
+    <div class="flex-none flex items-center gap-1 sm:gap-2">
+      <!-- Stats Badge (Desktop only) -->
+      <div class="badge badge-primary badge-outline gap-1 font-semibold py-3 px-3 hidden lg:inline-flex text-xs">
         <i class="fa-solid fa-hard-drive"></i>
         <span>{{ total_files }} глав · {{ total_size_mb }} MB</span>
       </div>
       
       <!-- Download Modal Button -->
-      <button onclick="download_modal.showModal()" class="btn btn-primary btn-sm sm:btn-md gap-2 font-bold shadow-md shadow-primary/20">
-        <i class="fa-solid fa-cloud-arrow-down"></i>
-        <span class="hidden sm:inline">Выкачать мангу</span>
-        <span class="sm:hidden">Скачать</span>
+      <button onclick="download_modal.showModal()" class="btn btn-primary btn-sm btn-circle sm:btn-square sm:w-auto sm:px-3 sm:btn-sm gap-2 font-bold shadow-sm shadow-primary/20" title="Выкачать мангу">
+        <i class="fa-solid fa-cloud-arrow-down text-sm"></i>
+        <span class="hidden sm:inline">Выкачать</span>
       </button>
 
       <!-- Clear Offline Cache Button -->
-      <button onclick="clearAllCache()" class="btn btn-ghost btn-sm sm:btn-md gap-2 text-error font-bold" title="Очистить оффлайн-кэш">
-        <i class="fa-solid fa-trash-can"></i>
-        <span class="hidden md:inline">Очистить кэш</span>
+      <button onclick="clearAllCache()" class="btn btn-ghost btn-sm btn-circle text-error font-bold" title="Очистить оффлайн-кэш" aria-label="Очистить кэш">
+        <i class="fa-solid fa-trash-can text-sm"></i>
+      </button>
+
+      <!-- PWA Install Button -->
+      <button id="installAppButton" onclick="installApp()" class="btn btn-ghost btn-sm btn-circle" title="Установить приложение" aria-label="Установить приложение">
+        <i class="fa-solid fa-download text-sm"></i>
       </button>
 
       <!-- Theme Controller Dropdown -->
-      <button id="installAppButton" onclick="installApp()" class="btn btn-ghost btn-circle" title="Установить приложение" aria-label="Установить приложение"><i class="fa-solid fa-download"></i></button>
       <div class="dropdown dropdown-end">
-        <div tabindex="0" role="button" class="btn btn-ghost btn-circle">
-          <i class="fa-solid fa-palette text-lg"></i>
+        <div tabindex="0" role="button" class="btn btn-ghost btn-sm btn-circle" title="Тема оформления" aria-label="Сменить тему">
+          <i class="fa-solid fa-palette text-sm"></i>
         </div>
         <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-base-200 rounded-box w-40 border border-base-300">
           <li><button onclick="setTheme('dark')">🌙 Dark</button></li>
@@ -858,11 +860,7 @@
             </div>
           `;
           row.onclick = () => {
-            if (sourceId === 'mangakawaii') {
-              window.location.href = `/reader/${encodeURIComponent(mangaId)}/${encodeURIComponent(ch.number || ch.id)}`;
-            } else {
-              alert(`Глава «${ch.title}» (${ch.lang || sourceId}) выбрана.`);
-            }
+            window.location.href = `/online-reader/${encodeURIComponent(sourceId)}/${encodeURIComponent(mangaId)}/${encodeURIComponent(ch.id)}`;
           };
           listDiv.appendChild(row);
         });

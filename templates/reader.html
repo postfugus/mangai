@@ -275,9 +275,9 @@
           <li class="menu-title font-bold text-xs uppercase opacity-60">Главы</li>
           {% for ch in all_chapters %}
             <li>
-              <a href="/reader/{{ manga_name }}/{{ ch.filename }}" class="flex justify-between py-2 {% if ch.filename == filename %}active font-bold{% endif %}">
+              <a href="{{ ch.url if ch.url else '/reader/' ~ manga_name ~ '/' ~ ch.filename }}" class="flex justify-between py-2 {% if ch.filename == filename %}active font-bold{% endif %}">
                 <span class="truncate">{{ ch.filename }}</span>
-                <span class="text-xs opacity-50">{{ ch.size_mb }}MB</span>
+                <span class="text-xs opacity-50">{{ ch.size_mb }}</span>
               </a>
             </li>
           {% endfor %}
@@ -492,6 +492,15 @@
     const MANGA_NAME = "{{ manga_name }}";
     const FILENAME = "{{ filename }}";
     const PAGES_LIST = {{ pages_list | tojson }};
+    const IS_ONLINE = {{ 'true' if is_online else 'false' }};
+
+    function getPageImageUrl(pageEntry, idx) {
+      if (!pageEntry) return '';
+      if (typeof pageEntry === 'string' && (pageEntry.startsWith('http://') || pageEntry.startsWith('https://'))) {
+        return `/api/proxy-image?url=${encodeURIComponent(pageEntry)}`;
+      }
+      return `/page-image/${encodeURIComponent(MANGA_NAME)}/${encodeURIComponent(FILENAME)}/${idx}`;
+    }
     
     let currentPageIdx = 0;
     let readingMode = 'single';
@@ -585,7 +594,7 @@
           if (audioReadingActive && idx === currentPageIdx) startAudioPage();
         });
       };
-      img.src = `/page-image/${MANGA_NAME}/${FILENAME}/${idx}`;
+      img.src = getPageImageUrl(PAGES_LIST[idx], idx);
       closeDetailsModal();
       
       window.scrollTo({ top: 0, behavior: 'instant' });
@@ -1273,7 +1282,7 @@
         wrap.className = 'page-wrapper webtoon-page';
         wrap.dataset.pageIndex = idx;
         const img = document.createElement('img');
-        img.src = `/page-image/${MANGA_NAME}/${FILENAME}/${idx}`;
+        img.src = getPageImageUrl(pageName, idx);
         img.loading = 'lazy';
         img.className = 'page-image rounded-xl';
         img.addEventListener('load', () => wrap.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`);
