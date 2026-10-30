@@ -586,9 +586,10 @@
       if (audioSel) audioSel.value = currentVoiceLang;
 
       // Highlight active in dropdown and reflect availability
+      const cachedLangs = availableVoiceLangs.map(v => typeof v === 'object' ? v.lang : v);
       ['ru', 'fr', 'de', 'it', 'en'].forEach(code => {
         const opt = document.getElementById(`langOpt-${code}`);
-        const isCached = availableVoiceLangs.includes(code);
+        const isCached = cachedLangs.includes(code);
         if (opt) {
           if (code === currentVoiceLang) {
             opt.classList.add('active', 'font-bold');
@@ -910,8 +911,8 @@
             }
           }
         }
-        // Подсвечиваем бабл на странице (если аудио уже играло, не перезапускаем трек с нуля!)
-        showCurrentAudioBubble(!isAudioPlaying);
+        // Подсвечиваем бабл на странице и запускаем аудио, если оно ещё не играет!
+        showCurrentAudioBubble(true);
         return;
       }
       if (!chapterVoiceoverPreparing) prepareChapterVoiceover().then(data => { if (data && audioReadingActive) startAudioPage(); });
@@ -1018,8 +1019,13 @@
         audio.currentTime = Math.max(0, timing.start);
       }
       setupContinuousAudioSync();
-      await audio.play();
-      updateAudioPlayIcon(true);
+      try {
+        await audio.play();
+        updateAudioPlayIcon(true);
+      } catch (err) {
+        console.warn('Playback error (waiting for user interaction):', err);
+        updateAudioPlayIcon(false);
+      }
     }
 
     function toggleContinuousChapterAudio() {
