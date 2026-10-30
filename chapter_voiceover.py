@@ -700,19 +700,20 @@ def _whisper_model(model_name: str):
         return None
 
 
-def transcribe_and_align(audio: bytes, items: List[Dict], model_name: str = "small") -> Tuple[Dict, float]:
+def transcribe_and_align(audio: bytes, items: List[Dict], lang: str = "ru", model_name: str = "small") -> Tuple[Dict, float]:
     with wave.open(io.BytesIO(audio), "rb") as wav_file:
         duration = wav_file.getnframes() / float(wav_file.getframerate())
     rms, frame_seconds = _audio_rms_envelope(audio)
 
     model = _whisper_model(model_name)
     words = []
+    whisper_lang = (lang or "ru")[:2].lower()
     if model is not None:
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav") as audio_file:
                 audio_file.write(audio)
                 audio_file.flush()
-                segments, _ = model.transcribe(audio_file.name, language="fr", beam_size=1,
+                segments, _ = model.transcribe(audio_file.name, language=whisper_lang, beam_size=1,
                                                word_timestamps=True, vad_filter=True,
                                                condition_on_previous_text=False)
                 for segment in segments:
@@ -838,8 +839,8 @@ def synthesize_chapter_multilingual(
                 load_chunk=load_chunk, save_chunk=save_chunk,
                 on_progress=on_progress
             )
-            # Perform word/acoustic boundary alignment
-            segments, duration = transcribe_and_align(audio_wav, items)
+            # Perform word/acoustic boundary alignment with Whisper
+            segments, duration = transcribe_and_align(audio_wav, items, lang=lang)
             voice_label = target_voice
             model_label = GEMINI_TTS_MODEL
             return audio_wav, segments, duration, voice_label, model_label
