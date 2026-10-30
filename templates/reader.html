@@ -1182,8 +1182,10 @@
       }
     }
 
-    function chapterVoiceoverUrl() {
-      return `/api/chapter-voiceover/${encodeURIComponent(MANGA_NAME)}/${encodeURIComponent(FILENAME)}?lang=${encodeURIComponent(currentVoiceLang)}`;
+    function chapterVoiceoverUrl(action = '') {
+      const base = `/api/chapter-voiceover/${encodeURIComponent(MANGA_NAME)}/${encodeURIComponent(FILENAME)}`;
+      const path = action ? `${base}/${action}` : base;
+      return `${path}?lang=${encodeURIComponent(currentVoiceLang)}`;
     }
 
     function findChapterBubble(pageIdx, box) {
@@ -1259,14 +1261,16 @@
 
     async function ensureChapterAudioLoaded() {
       const audio = document.getElementById('ttsAudio');
-      if (chapterVoiceoverObjectUrl && audio.dataset.sourceKind === 'chapter') return;
-      const response = await fetch(`${chapterVoiceoverUrl()}/audio`);
+      if (chapterVoiceoverObjectUrl && audio.dataset.sourceKind === 'chapter' && audio.dataset.audioLang === currentVoiceLang) return;
+      const response = await fetch(chapterVoiceoverUrl('audio'));
       if (!response.ok) throw new Error('Не удалось загрузить сохранённую аудиоглаву.');
       const blob = await response.blob();
       if (instantAudioObjectUrl) { URL.revokeObjectURL(instantAudioObjectUrl); instantAudioObjectUrl = ''; }
+      if (chapterVoiceoverObjectUrl) { URL.revokeObjectURL(chapterVoiceoverObjectUrl); chapterVoiceoverObjectUrl = ''; }
       chapterVoiceoverObjectUrl = URL.createObjectURL(blob);
       audio.src = chapterVoiceoverObjectUrl;
       audio.dataset.sourceKind = 'chapter';
+      audio.dataset.audioLang = currentVoiceLang;
       audio.load();
     }
 
