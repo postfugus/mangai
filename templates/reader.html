@@ -109,31 +109,19 @@
     .in-bubble-replacement.translation-overflow {
       background: rgba(255, 255, 255, 0.98);
     }
-    /* Мягкая подсветка в режиме аудио: одно сплошное прозрачное круглое облачко (без дырки внутри) */
+    /* Выделенный контейнер подсветки: единое сплошное рассеивающееся круглое облачко */
+    #audioCloudIndicator {
+      position: absolute;
+      z-index: 35;
+      border-radius: 9999px;
+      pointer-events: none;
+      background: rgba(249, 115, 22, 0.38);
+      filter: blur(14px);
+      transition: all 0.35s cubic-bezier(0.2, 0.8, 0.25, 1);
+      display: none;
+    }
     .in-bubble-replacement.audio-current {
       z-index: 38 !important;
-      border: none !important;
-      border-radius: 9999px !important;
-      background: rgba(249, 115, 22, 0.35) !important;
-      box-shadow: 0 0 24px 10px rgba(249, 115, 22, 0.35) !important;
-      animation: singleDiffuseCloud 2s ease-in-out infinite alternate;
-      pointer-events: auto !important;
-    }
-    @keyframes singleDiffuseCloud {
-      0% {
-        background: rgba(249, 115, 22, 0.28) !important;
-        box-shadow: 0 0 18px 8px rgba(249, 115, 22, 0.28) !important;
-      }
-      100% {
-        background: rgba(249, 115, 22, 0.42) !important;
-        box-shadow: 0 0 32px 14px rgba(249, 115, 22, 0.42) !important;
-      }
-    }
-    .in-bubble-replacement.audio-current.original-transparent {
-      background: rgba(249, 115, 22, 0.35) !important;
-      border: none !important;
-      border-radius: 9999px !important;
-      box-shadow: 0 0 24px 10px rgba(249, 115, 22, 0.35) !important;
     }
     .in-bubble-replacement.audio-current .in-bubble-text {
       text-decoration: none;
@@ -380,6 +368,7 @@
         <div id="selectionBox" class="selection-box"></div>
         <div id="bubblesLayer" class="absolute inset-0 pointer-events-auto"></div>
         <div id="replacementsLayer" class="absolute inset-0 pointer-events-auto"></div>
+        <div id="audioCloudIndicator"></div>
       </div>
 
       <!-- Navigation tap zones -->
@@ -719,6 +708,8 @@
         document.getElementById('pageWrapper').style.transform = '';
         document.querySelectorAll('.audio-order-number').forEach(el => el.remove());
         document.querySelectorAll('.in-bubble-replacement.audio-current').forEach(el => el.classList.remove('audio-current'));
+        const cloud = document.getElementById('audioCloudIndicator');
+        if (cloud) cloud.style.display = 'none';
         readingMode = modeBeforeAudio;
         document.getElementById('readerArea').classList.toggle('webtoon-mode', readingMode === 'webtoon');
         single.classList.toggle('hidden', readingMode !== 'single');
@@ -753,6 +744,8 @@
       document.getElementById('pageWrapper').style.transform = '';
       document.querySelectorAll('.audio-order-number').forEach(el => el.remove());
       document.querySelectorAll('.in-bubble-replacement.audio-current').forEach(el => el.classList.remove('audio-current'));
+      const cloud = document.getElementById('audioCloudIndicator');
+      if (cloud) cloud.style.display = 'none';
       readingMode = modeBeforeAudio;
       document.getElementById('readerArea').classList.toggle('webtoon-mode', readingMode === 'webtoon');
       document.getElementById('singleModeContainer').classList.toggle('hidden', readingMode !== 'single');
@@ -827,6 +820,38 @@
       }
 
       document.getElementById('audioLineCounter').textContent = `${audioReadingIndex + 1} / ${audioReadingItems.length}`;
+      
+      // Позиционируем единственный круглый рассеивающийся контейнер-облачко строго по реплике
+      const cloud = document.getElementById('audioCloudIndicator');
+      if (cloud && item.box) {
+        const boxX = parseFloat(bubble?.dataset.origX || item.box.x);
+        const boxY = parseFloat(bubble?.dataset.origY || item.box.y);
+        const boxW = parseFloat(bubble?.dataset.origW || item.box.w);
+        const boxH = parseFloat(bubble?.dataset.origH || item.box.h);
+
+        // Расширяем контейнер облачка чуть шире бабла, чтобы рассеивание было идеально круглым и мягким
+        const padX = Math.max(1.5, boxW * 0.15);
+        const padY = Math.max(1.5, boxH * 0.15);
+
+        cloud.style.left = Math.max(0, boxX - padX) + '%';
+        cloud.style.top = Math.max(0, boxY - padY) + '%';
+        cloud.style.width = (boxW + padX * 2) + '%';
+        cloud.style.height = (boxH + padY * 2) + '%';
+        cloud.style.display = 'block';
+
+        if (readingMode === 'webtoon') {
+          const webtoonPage = document.querySelector(`.webtoon-page[data-page-index="${targetPageIdx}"]`);
+          if (webtoonPage && cloud.parentElement !== webtoonPage) {
+            webtoonPage.appendChild(cloud);
+          }
+        } else {
+          const singleWrapper = document.getElementById('pageWrapper');
+          if (singleWrapper && cloud.parentElement !== singleWrapper) {
+            singleWrapper.appendChild(cloud);
+          }
+        }
+      }
+
       if (bubble) {
         bubble.classList.add('audio-current');
         bubble.scrollIntoView({ behavior: 'smooth', block: 'center' });
