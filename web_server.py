@@ -32,6 +32,10 @@ from db_cache import (get_all_cached_translations_for_page, init_db, get_cached_
                       get_cached_chapter_voiceover_tts_chunk,
                       save_cached_chapter_voiceover_tts_chunk,
                       delete_cached_chapter_voiceover_tts_chunks, clear_offline_cache)
+from keiyoushi_catalog import parse_keiyoushi_index
+from manga_sources import multi_source_search, search_mangadex, search_mangakawaii
+from db_cache import (get_favorites_library, toggle_favorite_manga, is_manga_in_library,
+                      get_enabled_sources_list, set_source_enabled_state)
 from chapter_voiceover import (DEEPGRAM_TTS_MODEL, GEMINI_FRENCH_MALE_VOICE,
                                GEMINI_TTS_MODEL, analyze_chapter_with_jev, has_pairwise_order_analysis,
                                chapter_fingerprint, order_chapter_items, synthesize_chapter_gemini,
@@ -759,6 +763,78 @@ def check_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     return tasks[task_id]
 
+
+
+# ==================== KEIYOUSHI EXTENSIONS & MIHON LIBRARY API ====================
+
+@app.get("/api/keiyoushi/extensions")
+def get_keiyoushi_extensions(query: Optional[str] = None, lang: Optional[str] = None):
+    try:
+        exts = parse_keiyoushi_index()
+        enabled_map = {s["source_id"]: s["enabled"] for s in get_enabled_sources_list()}
+        
+        filtered = []
+        for e in exts:
+            if lang and lang != "all" and e["lang"] != lang:
+                continue
+            if query:
+                q = query.lower()
+                if q not in e["name"].lower() and q not in e["pkg"].lower():
+                    continue
+            e_copy = dict(e)
+            e_copy["enabled"] = enabled_map.get(e["slug"], False)
+            filtered.append(e_copy)
+            
+        return {"total": len(filtered), "extensions": filtered[:120]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sources/enabled")
+def get_active_sources():
+    return {"sources": get_enabled_sources_list()}
+
+
+class ToggleSourceReq(BaseModel):
+    source_id: str
+    name: str
+    enabled: bool
+
+@app.post("/api/sources/toggle")
+def toggle_source(req: ToggleSourceReq):
+    set_source_enabled_state(req.source_id, req.name, req.enabled)
+    return {"status": "ok", "source_id": req.source_id, "enabled": req.enabled}
+
+
+@app.get("/api/manga/search")
+def api_search_manga(q: str = Query(..., min_length=1)):
+    enabled = [s["source_id"] for s in get_enabled_sources_list() if s["enabled"]]
+    # Always include mangadex and mangakawaii by default if none configured
+    if not enabled:
+        enabled = ["mangadex", "mangakawaii"]
+    results = multi_source_search(q, enabled)
+    # Check favorite status
+    for item in results:
+        item["in_library"] = is_manga_in_library(item["source_id"], item["id"])
+    return {"query": q, "total": len(results), "results": results}
+
+
+@app.get("/api/library")
+def get_library():
+    items = get_favorites_library()
+    return {"total": len(items), "library": items}
+
+
+class FavoriteReq(BaseModel):
+    source_id: str
+    manga_id: str
+    title: str
+    cover_url: Optional[str] = ""
+
+@app.post("/api/library/toggle")
+def toggle_favorite(req: FavoriteReq):
+    res = toggle_favorite_manga(req.source_id, req.manga_id, req.title, req.cover_url or "")
+    return res
 
 if __name__ == "__main__":
     import uvicorn

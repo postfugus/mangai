@@ -636,3 +636,105 @@ def clear_offline_cache(manga_name: Optional[str] = None, filename: Optional[str
             deleted["audio"] = cur.rowcount
         conn.commit()
     return deleted
+
+# ==================== MIHON FAVORITES / LIBRARY SHELF ====================
+
+def init_library_tables():
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS favorites_library (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id TEXT NOT NULL,
+                manga_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                cover_url TEXT DEFAULT '',
+                status TEXT DEFAULT 'reading',
+                category TEXT DEFAULT 'default',
+                last_chapter TEXT DEFAULT '',
+                unread_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source_id, manga_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS enabled_sources (
+                source_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                enabled INTEGER DEFAULT 1
+            )
+        """)
+        # Initialize default enabled sources
+        cursor.execute("INSERT OR IGNORE INTO enabled_sources (source_id, name, enabled) VALUES ('mangadex', 'MangaDex (Global)', 1)")
+        cursor.execute("INSERT OR IGNORE INTO enabled_sources (source_id, name, enabled) VALUES ('mangakawaii', 'MangaKawaii (FR)', 1)")
+        conn.commit()
+
+def get_favorites_library() -> list:
+    init_library_tables()
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, source_id, manga_id, title, cover_url, status, category, last_chapter, unread_count, created_at
+            FROM favorites_library
+            ORDER BY created_at DESC
+        """)
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "source_id": r[1],
+                "manga_id": r[2],
+                "title": r[3],
+                "cover_url": r[4],
+                "status": r[5],
+                "category": r[6],
+                "last_chapter": r[7],
+                "unread_count": r[8],
+                "created_at": r[9]
+            }
+            for r in rows
+        ]
+
+def toggle_favorite_manga(source_id: str, manga_id: str, title: str, cover_url: str = "") -> dict:
+    init_library_tables()
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM favorites_library WHERE source_id = ? AND manga_id = ?", (source_id, manga_id))
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute("DELETE FROM favorites_library WHERE source_id = ? AND manga_id = ?", (source_id, manga_id))
+            conn.commit()
+            return {"favorite": False, "message": "Удалено с полки"}
+        else:
+            cursor.execute("""
+                INSERT INTO favorites_library (source_id, manga_id, title, cover_url, status, category)
+                VALUES (?, ?, ?, ?, 'reading', 'default')
+            """, (source_id, manga_id, title, cover_url))
+            conn.commit()
+            return {"favorite": True, "message": "Добавлено на полку"}
+
+def is_manga_in_library(source_id: str, manga_id: str) -> bool:
+    init_library_tables()
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM favorites_library WHERE source_id = ? AND manga_id = ?", (source_id, manga_id))
+        return cursor.fetchone() is not None
+
+def get_enabled_sources_list() -> list:
+    init_library_tables()
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT source_id, name, enabled FROM enabled_sources")
+        rows = cursor.fetchall()
+        return [{"source_id": r[0], "name": r[1], "enabled": bool(r[2])} for r in rows]
+
+def set_source_enabled_state(source_id: str, name: str, enabled: bool):
+    init_library_tables()
+    with sqlite3.connect(DB_PATH, timeout=10) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO enabled_sources (source_id, name, enabled)
+            VALUES (?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET enabled = excluded.enabled
+        """, (source_id, name, 1 if enabled else 0))
+        conn.commit()

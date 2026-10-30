@@ -79,8 +79,43 @@
     </div>
   </div>
 
-  <!-- Hero Section -->
-  <div class="max-w-5xl mx-auto w-full px-4 pt-6 pb-2">
+  <!-- Main Navigation Tabs (Mihon-style) -->
+  <div class="max-w-5xl mx-auto w-full px-4 pt-4">
+    <div class="tabs tabs-boxed bg-base-100 p-1 rounded-2xl border border-base-200 shadow-sm flex flex-wrap gap-1">
+      <button id="tabBtnDownloaded" onclick="switchMainTab('downloaded')" class="tab tab-active flex-1 py-3 font-extrabold gap-2">
+        <i class="fa-solid fa-folder-open text-primary"></i>
+        <span>Загрузки</span>
+      </button>
+      <button id="tabBtnLibrary" onclick="switchMainTab('library')" class="tab flex-1 py-3 font-extrabold gap-2">
+        <i class="fa-solid fa-bookmark text-secondary"></i>
+        <span>Полка избранного</span>
+        <span id="libraryCountBadge" class="badge badge-sm badge-secondary font-bold ml-1">0</span>
+      </button>
+      <button id="tabBtnSearch" onclick="switchMainTab('search')" class="tab flex-1 py-3 font-extrabold gap-2">
+        <i class="fa-solid fa-compass text-accent"></i>
+        <span>Поиск по сайтам</span>
+      </button>
+      <button id="tabBtnKeiyoushi" onclick="switchMainTab('keiyoushi')" class="tab flex-1 py-3 font-extrabold gap-2">
+        <i class="fa-solid fa-puzzle-piece text-info"></i>
+        <span>Расширения (Keiyoushi)</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Container -->
+  <div class="max-w-5xl mx-auto w-full px-4 pt-4 pb-12">
+    <!-- TAB 1: DOWNLOADED CHAPTERS -->
+    <section id="tabContentDownloaded">
+      <!-- Search Bar for Downloaded -->
+      <div class="form-control w-full mb-6">
+        <div class="relative">
+          <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-base-content/40">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </span>
+          <input type="search" id="searchInput" oninput="filterChapters()" placeholder="Поиск по скачанным главам (например: Kaze, Ch. 01)" class="input input-bordered w-full pl-11 bg-base-100 shadow-sm focus:input-primary rounded-2xl" />
+        </div>
+      </div>
+
     <!-- Search Bar -->
     <div class="form-control w-full mb-6">
       <div class="relative">
@@ -168,6 +203,106 @@
         </div>
       {% endfor %}
     {% endif %}
+  </div>
+
+    </section>
+
+    <!-- TAB 2: FAVORITES / LIBRARY SHELF (MIHON STYLE) -->
+    <section id="tabContentLibrary" style="display:none">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-2xl font-black flex items-center gap-2">
+            <i class="fa-solid fa-book-bookmark text-secondary"></i> Моя полка
+          </h2>
+          <p class="text-xs text-base-content/60">Избранная манга и закладки со всех сайтов</p>
+        </div>
+        <button onclick="loadLibraryShelf()" class="btn btn-ghost btn-sm btn-circle" title="Обновить полку">
+          <i class="fa-solid fa-rotate-right"></i>
+        </button>
+      </div>
+
+      <div id="libraryLoading" class="text-center py-12" style="display:none">
+        <span class="loading loading-spinner loading-lg text-secondary"></span>
+        <p class="mt-3 text-sm opacity-60">Загрузка вашей полки…</p>
+      </div>
+
+      <div id="libraryEmpty" class="hero bg-base-100 rounded-3xl p-10 border border-base-200 shadow-sm my-4" style="display:none">
+        <div class="hero-content text-center">
+          <div class="max-w-md">
+            <i class="fa-solid fa-bookmark text-6xl text-base-content/20 mb-4"></i>
+            <h3 class="text-xl font-bold">На полке пока пусто</h3>
+            <p class="py-3 text-sm text-base-content/60">Найдите интересующую мангу во вкладке «Поиск по сайтам» и нажмите «Добавить на полку».</p>
+            <button onclick="switchMainTab('search')" class="btn btn-secondary btn-sm rounded-xl">Перейти к поиску</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="libraryGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+    </section>
+
+    <!-- TAB 3: MULTI-SOURCE SEARCH -->
+    <section id="tabContentSearch" style="display:none">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-2xl font-black flex items-center gap-2">
+            <i class="fa-solid fa-compass text-accent"></i> Глобальный поиск
+          </h2>
+          <p class="text-xs text-base-content/60">Поиск сразу по каталогам MangaDex, MangaKawaii и другим подключенным источникам</p>
+        </div>
+        <div id="activeSourcesBadges" class="flex gap-1.5 flex-wrap"></div>
+      </div>
+
+      <form onsubmit="performGlobalSearch(event)" class="form-control w-full mb-6">
+        <div class="join w-full shadow-sm rounded-2xl overflow-hidden border border-base-200">
+          <input type="search" id="globalSearchInput" placeholder="Введите название манги (например: Berserk, Solo Leveling, Kaze to Ki...)" class="input input-bordered join-item w-full bg-base-100 focus:input-accent" required />
+          <button type="submit" id="globalSearchBtn" class="btn btn-accent join-item px-6 font-bold">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <span>Искать</span>
+          </button>
+        </div>
+      </form>
+
+      <div id="globalSearchLoading" class="text-center py-12" style="display:none">
+        <span class="loading loading-spinner loading-lg text-accent"></span>
+        <p class="mt-3 text-sm opacity-60">Опрашиваем каталоги сайтов…</p>
+      </div>
+
+      <div id="globalSearchResults" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4"></div>
+    </section>
+
+    <!-- TAB 4: KEIYOUSHI EXTENSIONS CATALOG -->
+    <section id="tabContentKeiyoushi" style="display:none">
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <div>
+          <h2 class="text-2xl font-black flex items-center gap-2">
+            <i class="fa-solid fa-puzzle-piece text-info"></i> Репозиторий Keiyoushi
+          </h2>
+          <p class="text-xs text-base-content/60">Каталог из 1,400+ расширений Mihon. Включайте источники для поиска или скачивайте APK</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="keiyoushiLangFilter" onchange="loadKeiyoushiExtensions()" class="select select-bordered select-sm rounded-xl">
+            <option value="all">Все языки</option>
+            <option value="ru">Русский (RU)</option>
+            <option value="en">English (EN)</option>
+            <option value="fr">Français (FR)</option>
+          </select>
+          <button onclick="loadKeiyoushiExtensions(true)" class="btn btn-ghost btn-sm btn-circle" title="Обновить репозиторий">
+            <i class="fa-solid fa-rotate-right"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="form-control w-full mb-6">
+        <input type="search" id="keiyoushiSearchInput" oninput="filterKeiyoushiList()" placeholder="Поиск расширения по названию (Remanga, MangaDex, Readmanga...)" class="input input-bordered input-sm sm:input-md w-full bg-base-100 shadow-sm rounded-2xl" />
+      </div>
+
+      <div id="keiyoushiLoading" class="text-center py-12">
+        <span class="loading loading-spinner loading-lg text-info"></span>
+        <p class="mt-3 text-sm opacity-60">Загрузка каталога Keiyoushi (1,400+ расширений)…</p>
+      </div>
+
+      <div id="keiyoushiGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5"></div>
+    </section>
   </div>
 
   <!-- Download New Manga Modal -->
@@ -338,6 +473,291 @@
         alert('Ошибка при очистке кэша: ' + e.message);
       }
     }
-  </script>
+  
+    // ==================== MIHON TABS & MULTI-SOURCE SEARCH JS ====================
+    let currentMainTab = 'downloaded';
+    let allKeiyoushiExtensions = [];
+
+    function switchMainTab(tab) {
+      currentMainTab = tab;
+      const tabs = ['downloaded', 'library', 'search', 'keiyoushi'];
+      tabs.forEach(t => {
+        const btn = document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1));
+        const content = document.getElementById('tabContent' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (btn) btn.classList.toggle('tab-active', t === tab);
+        if (content) content.style.display = (t === tab) ? 'block' : 'none';
+      });
+
+      if (tab === 'library') loadLibraryShelf();
+      if (tab === 'search') loadActiveSourcesBadges();
+      if (tab === 'keiyoushi' && allKeiyoushiExtensions.length === 0) loadKeiyoushiExtensions();
+    }
+
+    // --- Library Shelf Functions ---
+    async function loadLibraryShelf() {
+      const loading = document.getElementById('libraryLoading');
+      const empty = document.getElementById('libraryEmpty');
+      const grid = document.getElementById('libraryGrid');
+      const badge = document.getElementById('libraryCountBadge');
+
+      loading.style.display = 'block';
+      empty.style.display = 'none';
+      grid.innerHTML = '';
+
+      try {
+        const resp = await fetch('/api/library');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        loading.style.display = 'none';
+
+        const items = data.library || [];
+        if (badge) badge.innerText = String(items.length);
+
+        if (items.length === 0) {
+          empty.style.display = 'block';
+          return;
+        }
+
+        items.forEach(item => {
+          const card = document.createElement('div');
+          card.className = 'card bg-base-100 border border-base-200 shadow hover:shadow-xl transition-all rounded-2xl overflow-hidden group flex flex-col justify-between';
+          
+          const coverImg = item.cover_url
+            ? `<img src="${item.cover_url}" alt="${item.title}" class="w-full h-44 sm:h-52 object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.src='/static/pwa-192.png'" />`
+            : `<div class="w-full h-44 sm:h-52 bg-base-200 flex items-center justify-center text-4xl text-base-content/20"><i class="fa-solid fa-book"></i></div>`;
+
+          card.innerHTML = `
+            <div class="relative overflow-hidden">
+              ${coverImg}
+              <span class="badge badge-sm badge-neutral absolute top-2 left-2 font-bold uppercase text-[9px] shadow-md">${item.source_id}</span>
+              <button onclick="removeFavoriteFromLibrary('${item.source_id}', '${item.manga_id}', '${item.title.replace(/'/g, "\'")}')" class="btn btn-circle btn-xs btn-error absolute top-2 right-2 shadow opacity-90 hover:opacity-100" title="Убрать с полки">
+                <i class="fa-solid fa-bookmark"></i>
+              </button>
+            </div>
+            <div class="p-3 flex-1 flex flex-col justify-between">
+              <h4 class="font-extrabold text-xs sm:text-sm line-clamp-2 title mb-1" title="${item.title}">${item.title}</h4>
+              <div class="mt-2 flex items-center justify-between text-[10px] text-base-content/60">
+                <span>${item.last_chapter ? 'Гл. ' + item.last_chapter : 'Читаю'}</span>
+                <span class="badge badge-ghost badge-xs font-semibold">${item.status}</span>
+              </div>
+            </div>
+          `;
+          grid.appendChild(card);
+        });
+
+      } catch (err) {
+        loading.style.display = 'none';
+        console.error('Library shelf error:', err);
+      }
+    }
+
+    async function toggleFavorite(sourceId, mangaId, title, coverUrl = '', btnEl = null) {
+      try {
+        const resp = await fetch('/api/library/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: sourceId, manga_id: mangaId, title: title, cover_url: coverUrl })
+        });
+        const res = await resp.json();
+        if (btnEl) {
+          btnEl.classList.toggle('btn-secondary', res.favorite);
+          btnEl.classList.toggle('btn-outline', !res.favorite);
+          btnEl.innerHTML = res.favorite
+            ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке'
+            : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
+        }
+        // Update library counter badge
+        loadLibraryShelf();
+      } catch (e) {
+        alert('Ошибка добавления на полку: ' + e.message);
+      }
+    }
+
+    async function removeFavoriteFromLibrary(sourceId, mangaId, title) {
+      if (!confirm(`Убрать «${title}» с полки?`)) return;
+      await toggleFavorite(sourceId, mangaId, title, '');
+      loadLibraryShelf();
+    }
+
+    // --- Multi-source Global Search ---
+    async function loadActiveSourcesBadges() {
+      const container = document.getElementById('activeSourcesBadges');
+      try {
+        const resp = await fetch('/api/sources/enabled');
+        const data = await resp.json();
+        container.innerHTML = '';
+        (data.sources || []).forEach(s => {
+          if (s.enabled) {
+            const b = document.createElement('span');
+            b.className = 'badge badge-sm badge-accent badge-outline font-semibold gap-1';
+            b.innerHTML = `<i class="fa-solid fa-check text-[9px]"></i> ${s.name}`;
+            container.appendChild(b);
+          }
+        });
+      } catch (e) { console.warn(e); }
+    }
+
+    async function performGlobalSearch(e) {
+      if (e) e.preventDefault();
+      const q = document.getElementById('globalSearchInput').value.trim();
+      if (!q) return;
+
+      const loading = document.getElementById('globalSearchLoading');
+      const resultsContainer = document.getElementById('globalSearchResults');
+      const submitBtn = document.getElementById('globalSearchBtn');
+
+      loading.style.display = 'block';
+      resultsContainer.innerHTML = '';
+      submitBtn.disabled = true;
+
+      try {
+        const resp = await fetch(`/api/manga/search?q=${encodeURIComponent(q)}`);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        loading.style.display = 'none';
+        submitBtn.disabled = false;
+
+        const results = data.results || [];
+        if (results.length === 0) {
+          resultsContainer.innerHTML = `
+            <div class="col-span-full hero bg-base-100 rounded-3xl p-8 border border-base-200 text-center">
+              <div class="max-w-md">
+                <i class="fa-solid fa-circle-question text-5xl text-base-content/20 mb-3"></i>
+                <h4 class="font-bold text-lg">Ничего не найдено</h4>
+                <p class="text-xs text-base-content/60 mt-1">Попробуйте другое написание или латиницу (например: Berserk, Solo Leveling).</p>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        results.forEach(m => {
+          const card = document.createElement('div');
+          card.className = 'card bg-base-100 border border-base-200 shadow-sm hover:shadow-md transition-all rounded-2xl overflow-hidden flex flex-row p-3 gap-3.5';
+          
+          const coverImg = m.cover_url
+            ? `<img src="${m.cover_url}" alt="${m.title}" class="w-20 h-28 object-cover rounded-xl shadow-sm shrink-0" onerror="this.src='/static/pwa-192.png'" />`
+            : `<div class="w-20 h-28 bg-base-200 rounded-xl flex items-center justify-center text-2xl text-base-content/20 shrink-0"><i class="fa-solid fa-book"></i></div>`;
+
+          const favBtnClass = m.in_library ? 'btn-secondary' : 'btn-outline btn-secondary';
+          const favBtnText = m.in_library ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке' : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
+
+          card.innerHTML = `
+            ${coverImg}
+            <div class="flex-1 flex flex-col justify-between min-w-0">
+              <div>
+                <div class="flex items-center gap-1.5 mb-1">
+                  <span class="badge badge-xs badge-neutral font-extrabold uppercase text-[9px]">${m.source}</span>
+                  ${m.year ? `<span class="text-[10px] opacity-50">${m.year}</span>` : ''}
+                </div>
+                <h4 class="font-black text-sm text-base-content line-clamp-1" title="${m.title}">${m.title}</h4>
+                <p class="text-[11px] text-base-content/60 line-clamp-2 mt-0.5 leading-snug">${m.description || ''}</p>
+              </div>
+              <div class="flex items-center gap-2 mt-2">
+                <button onclick="toggleFavorite('${m.source_id}', '${m.id}', '${m.title.replace(/'/g, "\'")}', '${m.cover_url}', this)" class="btn btn-xs ${favBtnClass} font-bold rounded-lg flex-1">
+                  ${favBtnText}
+                </button>
+                <a href="${m.url}" target="_blank" class="btn btn-xs btn-ghost btn-circle" title="Открыть источник"><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>
+              </div>
+            </div>
+          `;
+          resultsContainer.appendChild(card);
+        });
+
+      } catch (err) {
+        loading.style.display = 'none';
+        submitBtn.disabled = false;
+        alert('Ошибка глобального поиска: ' + err.message);
+      }
+    }
+
+    // --- Keiyoushi Catalog Functions ---
+    async function loadKeiyoushiExtensions(forceRefresh = false) {
+      const loading = document.getElementById('keiyoushiLoading');
+      const grid = document.getElementById('keiyoushiGrid');
+      const lang = document.getElementById('keiyoushiLangFilter').value;
+
+      loading.style.display = 'block';
+      grid.innerHTML = '';
+
+      try {
+        const resp = await fetch(`/api/keiyoushi/extensions?lang=${encodeURIComponent(lang)}`);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        loading.style.display = 'none';
+
+        allKeiyoushiExtensions = data.extensions || [];
+        renderKeiyoushiExtensions(allKeiyoushiExtensions);
+      } catch (e) {
+        loading.style.display = 'none';
+        grid.innerHTML = `<div class="col-span-full alert alert-error text-xs font-bold">Не удалось загрузить Keiyoushi: ${e.message}</div>`;
+      }
+    }
+
+    function renderKeiyoushiExtensions(list) {
+      const grid = document.getElementById('keiyoushiGrid');
+      grid.innerHTML = '';
+
+      list.forEach(ext => {
+        const card = document.createElement('div');
+        card.className = 'card bg-base-100 border border-base-200 shadow-sm p-3.5 rounded-2xl flex flex-row items-center justify-between gap-3';
+        
+        const icon = ext.icon_url
+          ? `<img src="${ext.icon_url}" class="w-11 h-11 rounded-xl object-cover shrink-0 border border-base-200" onerror="this.src='/static/pwa-192.png'" />`
+          : `<div class="w-11 h-11 rounded-xl bg-info/10 text-info flex items-center justify-center font-black shrink-0"><i class="fa-solid fa-puzzle-piece"></i></div>`;
+
+        const isChecked = ext.enabled ? 'checked' : '';
+
+        card.innerHTML = `
+          <div class="flex items-center gap-3 min-w-0">
+            ${icon}
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5">
+                <span class="font-extrabold text-sm line-clamp-1">${ext.name}</span>
+                <span class="badge badge-neutral badge-xs font-bold uppercase text-[9px]">${ext.lang}</span>
+              </div>
+              <p class="text-[10px] text-base-content/50 truncate font-mono">${ext.version} · ${ext.slug}</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            ${ext.apk_url ? `<a href="${ext.apk_url}" target="_blank" class="btn btn-ghost btn-xs btn-circle" title="Скачать APK"><i class="fa-solid fa-download text-xs text-base-content/60"></i></a>` : ''}
+            <input type="checkbox" onchange="toggleExtensionSource('${ext.slug}', '${ext.name.replace(/'/g, "\'")}', this.checked)" class="toggle toggle-info toggle-sm" ${isChecked} title="Включить источник в поиск" />
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function filterKeiyoushiList() {
+      const q = (document.getElementById('keiyoushiSearchInput').value || '').toLowerCase().trim();
+      if (!q) {
+        renderKeiyoushiExtensions(allKeiyoushiExtensions);
+        return;
+      }
+      const filtered = allKeiyoushiExtensions.filter(e => e.name.toLowerCase().includes(q) || e.pkg.toLowerCase().includes(q) || e.slug.toLowerCase().includes(q));
+      renderKeiyoushiExtensions(filtered);
+    }
+
+    async function toggleExtensionSource(sourceId, name, enabled) {
+      try {
+        await fetch('/api/sources/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: sourceId, name: name, enabled: enabled })
+        });
+        loadActiveSourcesBadges();
+      } catch (e) {
+        console.warn('Toggle source error:', e);
+      }
+    }
+
+    // Auto-load library count on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      fetch('/api/library').then(r => r.json()).then(d => {
+        const b = document.getElementById('libraryCountBadge');
+        if (b && d.library) b.innerText = String(d.library.length);
+      }).catch(() => {});
+    });
+</script>
 </body>
 </html>
