@@ -33,7 +33,7 @@ from db_cache import (get_all_cached_translations_for_page, init_db, get_cached_
                       save_cached_chapter_voiceover_tts_chunk,
                       delete_cached_chapter_voiceover_tts_chunks, clear_offline_cache)
 from keiyoushi_catalog import parse_keiyoushi_index
-from manga_sources import multi_source_search, search_mangadex, search_mangakawaii
+from manga_sources import multi_source_search, search_mangadex, search_mangakawaii, get_manga_details_and_chapters
 from db_cache import (get_favorites_library, toggle_favorite_manga, is_manga_in_library,
                       get_enabled_sources_list, set_source_enabled_state)
 from chapter_voiceover import (DEEPGRAM_TTS_MODEL, GEMINI_FRENCH_MALE_VOICE,
@@ -805,6 +805,14 @@ def toggle_source(req: ToggleSourceReq):
     set_source_enabled_state(req.source_id, req.name, req.enabled)
     return {"status": "ok", "source_id": req.source_id, "enabled": req.enabled}
 
+
+@app.get("/api/manga/details/{source_id}/{manga_id}")
+def api_manga_details(source_id: str, manga_id: str):
+    data = get_manga_details_and_chapters(source_id, manga_id)
+    if "error" in data and not data.get("title"):
+        raise HTTPException(status_code=500, detail=data["error"])
+    data["in_library"] = is_manga_in_library(source_id, manga_id)
+    return data
 
 @app.get("/api/manga/search")
 def api_search_manga(q: str = Query(..., min_length=1)):

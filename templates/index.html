@@ -31,6 +31,31 @@
       }
     }
   </script>
+
+  <style>
+    /* Mobile-first enhancements */
+    @media (max-width: 640px) {
+      .tabs .tab {
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+        font-size: 0.75rem;
+      }
+      .tabs .tab span:not(.badge) {
+        display: none;
+      }
+      .tabs .tab i {
+        font-size: 1.1rem;
+        margin: 0;
+      }
+      #smartSearchHint {
+        font-size: 0.65rem;
+      }
+      .manga-card-mobile {
+        padding: 0.5rem;
+      }
+    }
+  </style>
+
 </head>
 <body class="bg-base-300 text-base-content min-h-screen flex flex-col font-sans selection:bg-primary selection:text-primary-content">
 
@@ -308,6 +333,52 @@
     </section>
   </div>
 
+  <!-- Mihon-style Manga Details & Chapters Modal (Mobile-first) -->
+  <dialog id="manga_details_modal" class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box bg-base-100 border border-base-200 shadow-2xl rounded-t-3xl sm:rounded-3xl max-w-2xl p-0 overflow-hidden max-h-[92vh] flex flex-col">
+      <!-- Modal Header with Backdrop / Cover -->
+      <div class="relative bg-gradient-to-b from-base-300 via-base-200 to-base-100 p-4 sm:p-6 pb-4 border-b border-base-200">
+        <form method="dialog">
+          <button class="btn btn-sm btn-circle btn-neutral absolute right-3 top-3 z-20 shadow">✕</button>
+        </form>
+        
+        <div class="flex gap-3.5 sm:gap-5 items-start">
+          <img id="detailCover" src="/static/pwa-192.png" alt="Cover" class="w-24 sm:w-28 h-36 sm:h-40 object-cover rounded-2xl shadow-lg border border-base-100 shrink-0" onerror="this.src='/static/pwa-192.png'" />
+          <div class="flex-1 min-w-0 pr-6">
+            <div class="flex items-center gap-1.5 mb-1.5 flex-wrap">
+              <span id="detailSourceBadge" class="badge badge-sm badge-neutral font-extrabold uppercase text-[10px]"></span>
+              <span id="detailStatusBadge" class="badge badge-sm badge-ghost text-[10px] font-semibold"></span>
+            </div>
+            <h3 id="detailTitle" class="font-black text-base sm:text-xl line-clamp-2 leading-tight text-base-content mb-2"></h3>
+            <div id="detailGenres" class="flex flex-wrap gap-1 mb-2.5"></div>
+            <button id="detailFavBtn" class="btn btn-xs sm:btn-sm btn-secondary font-bold gap-1.5 rounded-xl shadow">
+              <i class="fa-solid fa-bookmark"></i> <span>На полку</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Description Body -->
+      <div class="px-4 sm:px-6 py-3 border-b border-base-200 bg-base-100/60">
+        <p id="detailDesc" class="text-xs sm:text-sm text-base-content/75 line-clamp-3 leading-relaxed transition-all cursor-pointer" onclick="this.classList.toggle('line-clamp-3')" title="Нажмите, чтобы развернуть"></p>
+      </div>
+
+      <!-- Chapters List Header -->
+      <div class="px-4 sm:px-6 py-2.5 bg-base-200/50 flex items-center justify-between border-b border-base-200">
+        <span class="font-extrabold text-xs sm:text-sm flex items-center gap-1.5">
+          <i class="fa-solid fa-list-ol text-primary"></i>
+          <span>Список глав (<span id="detailChapterCount">0</span>)</span>
+        </span>
+        <span class="text-[10px] text-base-content/50">Порядок: Новые сверху</span>
+      </div>
+
+      <!-- Scrollable Chapters List -->
+      <div id="detailChaptersList" class="flex-1 overflow-y-auto divide-y divide-base-200 p-2 sm:p-4 space-y-1">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+  </dialog>
+
   <!-- Download New Manga Modal -->
   <dialog id="download_modal" class="modal modal-bottom sm:modal-middle">
     <div class="modal-box bg-base-100 border border-base-200 shadow-2xl rounded-3xl">
@@ -484,7 +555,6 @@
 
     function onSearchInputChange(val) {
       filterChapters();
-      // If user typed something and we have 0 local results, gently suggest or auto-trigger online search
       clearTimeout(localFilterTimeout);
       const q = (val || '').trim();
       const visibleChapters = document.querySelectorAll('.chapter-item:not([style*="display: none"])').length;
@@ -501,7 +571,6 @@
       const q = document.getElementById('searchInput').value.trim();
       if (!q) return;
 
-      // Switch to Online Search Results tab immediately and execute search
       switchMainTab('search');
       performGlobalSearchWithQuery(q);
     }
@@ -521,21 +590,128 @@
       if (tab === 'keiyoushi' && allKeiyoushiExtensions.length === 0) loadKeiyoushiExtensions();
     }
 
+    // --- Library Shelf Functions (Mihon Grid) ---
+    async function loadLibraryShelf() {
+      const loading = document.getElementById('libraryLoading');
+      const empty = document.getElementById('libraryEmpty');
+      const grid = document.getElementById('libraryGrid');
+      const badge = document.getElementById('libraryCountBadge');
+
+      if (loading) loading.style.display = 'block';
+      if (empty) empty.style.display = 'none';
+      if (grid) grid.innerHTML = '';
+
+      try {
+        const resp = await fetch('/api/library');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        if (loading) loading.style.display = 'none';
+
+        const items = data.library || [];
+        if (badge) badge.innerText = String(items.length);
+
+        if (items.length === 0) {
+          if (empty) empty.style.display = 'block';
+          return;
+        }
+
+        items.forEach(item => {
+          const card = document.createElement('div');
+          card.className = 'card bg-base-100 border border-base-200 shadow-sm hover:shadow-xl transition-all rounded-2xl overflow-hidden group flex flex-col justify-between cursor-pointer active:scale-[0.98]';
+          card.onclick = (e) => {
+            if (e.target.closest('button')) return;
+            openMangaDetails(item.source_id, item.manga_id, item.title, item.cover_url);
+          };
+
+          const coverImg = item.cover_url
+            ? `<img src="${item.cover_url}" alt="${item.title}" class="w-full h-40 sm:h-52 object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.src='/static/pwa-192.png'" />`
+            : `<div class="w-full h-40 sm:h-52 bg-base-200 flex items-center justify-center text-4xl text-base-content/20"><i class="fa-solid fa-book"></i></div>`;
+
+          card.innerHTML = `
+            <div class="relative overflow-hidden">
+              ${coverImg}
+              <span class="badge badge-sm badge-neutral absolute top-2 left-2 font-bold uppercase text-[9px] shadow-md">${item.source_id}</span>
+              <button onclick="removeFavoriteFromLibrary('${item.source_id}', '${item.manga_id}', '${item.title.replace(/'/g, "\\'")}')" class="btn btn-circle btn-xs btn-error absolute top-2 right-2 shadow opacity-90 hover:opacity-100" title="Убрать с полки">
+                <i class="fa-solid fa-bookmark"></i>
+              </button>
+            </div>
+            <div class="p-2.5 sm:p-3 flex-1 flex flex-col justify-between">
+              <h4 class="font-extrabold text-xs sm:text-sm line-clamp-2 leading-snug group-hover:text-primary transition-colors mb-1" title="${item.title}">${item.title}</h4>
+              <div class="mt-2 flex items-center justify-between text-[10px] text-base-content/60">
+                <span>${item.last_chapter ? 'Гл. ' + item.last_chapter : 'Открыть'}</span>
+                <span class="badge badge-ghost badge-xs font-semibold">${item.status}</span>
+              </div>
+            </div>
+          `;
+          grid.appendChild(card);
+        });
+
+      } catch (err) {
+        if (loading) loading.style.display = 'none';
+        console.error('Library shelf error:', err);
+      }
+    }
+
+    async function toggleFavorite(sourceId, mangaId, title, coverUrl = '', btnEl = null) {
+      try {
+        const resp = await fetch('/api/library/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: sourceId, manga_id: mangaId, title: title, cover_url: coverUrl })
+        });
+        const res = await resp.json();
+        if (btnEl) {
+          btnEl.classList.toggle('btn-secondary', res.favorite);
+          btnEl.classList.toggle('btn-outline', !res.favorite);
+          btnEl.innerHTML = res.favorite
+            ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке'
+            : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
+        }
+        loadLibraryShelf();
+      } catch (e) {
+        alert('Ошибка добавления на полку: ' + e.message);
+      }
+    }
+
+    async function removeFavoriteFromLibrary(sourceId, mangaId, title) {
+      if (!confirm(`Убрать «${title}» с полки?`)) return;
+      await toggleFavorite(sourceId, mangaId, title, '');
+    }
+
+    // --- Multi-source Online Search ---
+    async function loadActiveSourcesBadges() {
+      const container = document.getElementById('activeSourcesBadges');
+      try {
+        const resp = await fetch('/api/sources/enabled');
+        const data = await resp.json();
+        if (!container) return;
+        container.innerHTML = '';
+        (data.sources || []).forEach(s => {
+          if (s.enabled) {
+            const b = document.createElement('span');
+            b.className = 'badge badge-sm badge-accent badge-outline font-semibold gap-1 text-[10px] sm:text-xs';
+            b.innerHTML = `<i class="fa-solid fa-check text-[9px]"></i> ${s.name}`;
+            container.appendChild(b);
+          }
+        });
+      } catch (e) { console.warn(e); }
+    }
+
     async function performGlobalSearchWithQuery(q) {
       const loading = document.getElementById('globalSearchLoading');
       const resultsContainer = document.getElementById('globalSearchResults');
       const submitBtn = document.getElementById('mainSearchSubmitBtn');
       const badge = document.getElementById('searchResultsCountBadge');
 
-      loading.style.display = 'block';
-      resultsContainer.innerHTML = '';
+      if (loading) loading.style.display = 'block';
+      if (resultsContainer) resultsContainer.innerHTML = '';
       if (submitBtn) submitBtn.disabled = true;
 
       try {
         const resp = await fetch(`/api/manga/search?q=${encodeURIComponent(q)}`);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
-        loading.style.display = 'none';
+        if (loading) loading.style.display = 'none';
         if (submitBtn) submitBtn.disabled = false;
 
         const results = data.results || [];
@@ -550,7 +726,7 @@
               <div class="max-w-md">
                 <i class="fa-solid fa-circle-question text-5xl text-base-content/20 mb-3"></i>
                 <h4 class="font-bold text-lg">По запросу «${q}» ничего не найдено</h4>
-                <p class="text-xs text-base-content/60 mt-1">Попробуйте другое написание названия (например: Berserk, Solo Leveling, Kaze to Ki no Uta).</p>
+                <p class="text-xs text-base-content/60 mt-1">Попробуйте другое написание (например: Berserk, Solo Leveling, Kaze to Ki no Uta).</p>
               </div>
             </div>
           `;
@@ -559,31 +735,38 @@
 
         results.forEach(m => {
           const card = document.createElement('div');
-          card.className = 'card bg-base-100 border border-base-200 shadow-sm hover:shadow-md transition-all rounded-2xl overflow-hidden flex flex-row p-3 gap-3.5';
-          
+          // Responsive Mobile-first Card: Clicking card opens Mihon details screen
+          card.className = 'card bg-base-100 border border-base-200 shadow-sm hover:shadow-lg transition-all rounded-2xl overflow-hidden flex flex-row p-2.5 sm:p-3.5 gap-3 cursor-pointer group active:scale-[0.99]';
+          card.onclick = (e) => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            openMangaDetails(m.source_id, m.id, m.title, m.cover_url);
+          };
+
           const coverImg = m.cover_url
-            ? `<img src="${m.cover_url}" alt="${m.title}" class="w-20 h-28 object-cover rounded-xl shadow-sm shrink-0" onerror="this.src='/static/pwa-192.png'" />`
-            : `<div class="w-20 h-28 bg-base-200 rounded-xl flex items-center justify-center text-2xl text-base-content/20 shrink-0"><i class="fa-solid fa-book"></i></div>`;
+            ? `<img src="${m.cover_url}" alt="${m.title}" class="w-20 sm:w-24 h-28 sm:h-32 object-cover rounded-xl shadow-sm shrink-0 group-hover:scale-105 transition-transform duration-200" onerror="this.src='/static/pwa-192.png'" />`
+            : `<div class="w-20 sm:w-24 h-28 sm:h-32 bg-base-200 rounded-xl flex items-center justify-center text-2xl text-base-content/20 shrink-0"><i class="fa-solid fa-book"></i></div>`;
 
           const favBtnClass = m.in_library ? 'btn-secondary' : 'btn-outline btn-secondary';
           const favBtnText = m.in_library ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке' : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
 
           card.innerHTML = `
             ${coverImg}
-            <div class="flex-1 flex flex-col justify-between min-w-0">
+            <div class="flex-1 flex flex-col justify-between min-w-0 py-0.5">
               <div>
-                <div class="flex items-center gap-1.5 mb-1">
+                <div class="flex items-center gap-1.5 mb-1 flex-wrap">
                   <span class="badge badge-xs badge-neutral font-extrabold uppercase text-[9px]">${m.source}</span>
                   ${m.year ? `<span class="text-[10px] opacity-50">${m.year}</span>` : ''}
                 </div>
-                <h4 class="font-black text-sm text-base-content line-clamp-1" title="${m.title}">${m.title}</h4>
-                <p class="text-[11px] text-base-content/60 line-clamp-2 mt-0.5 leading-snug">${m.description || ''}</p>
+                <h4 class="font-black text-sm sm:text-base text-base-content line-clamp-2 leading-snug group-hover:text-primary transition-colors" title="${m.title}">${m.title}</h4>
+                <p class="text-[11px] text-base-content/60 line-clamp-2 mt-1 leading-snug">${m.description || ''}</p>
               </div>
-              <div class="flex items-center gap-2 mt-2">
-                <button onclick="toggleFavorite('${m.source_id}', '${m.id}', '${m.title.replace(/'/g, "\'")}', '${m.cover_url}', this)" class="btn btn-xs ${favBtnClass} font-bold rounded-lg flex-1">
+              <div class="flex items-center gap-2 mt-2 pt-1 border-t border-base-200/60">
+                <button onclick="toggleFavorite('${m.source_id}', '${m.id}', '${m.title.replace(/'/g, "\\'")}', '${m.cover_url}', this)" class="btn btn-xs ${favBtnClass} font-bold rounded-lg flex-1">
                   ${favBtnText}
                 </button>
-                <a href="${m.url}" target="_blank" class="btn btn-xs btn-ghost btn-circle" title="Открыть источник"><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>
+                <button onclick="openMangaDetails('${m.source_id}', '${m.id}', '${m.title.replace(/'/g, "\\'")}', '${m.cover_url}')" class="btn btn-xs btn-primary btn-outline rounded-lg px-2.5 font-bold" title="Открыть список глав">
+                  Главы <i class="fa-solid fa-chevron-right text-[10px]"></i>
+                </button>
               </div>
             </div>
           `;
@@ -591,74 +774,102 @@
         });
 
       } catch (err) {
-        loading.style.display = 'none';
+        if (loading) loading.style.display = 'none';
         if (submitBtn) submitBtn.disabled = false;
         alert('Ошибка онлайн-поиска: ' + err.message);
       }
     }
 
-    function performGlobalSearch(e) {
-      if (e) e.preventDefault();
-      const q = (document.getElementById('globalSearchInput')?.value || document.getElementById('searchInput')?.value || '').trim();
-      if (q) performGlobalSearchWithQuery(q);
-    }
-`);
+    // --- Mihon Manga Details Modal (Mobile-first) ---
+    async function openMangaDetails(sourceId, mangaId, fallbackTitle = '', fallbackCover = '') {
+      const modal = document.getElementById('manga_details_modal');
+      const cover = document.getElementById('detailCover');
+      const title = document.getElementById('detailTitle');
+      const sourceBadge = document.getElementById('detailSourceBadge');
+      const statusBadge = document.getElementById('detailStatusBadge');
+      const genresDiv = document.getElementById('detailGenres');
+      const desc = document.getElementById('detailDesc');
+      const favBtn = document.getElementById('detailFavBtn');
+      const countSpan = document.getElementById('detailChapterCount');
+      const listDiv = document.getElementById('detailChaptersList');
+
+      cover.src = fallbackCover || '/static/pwa-192.png';
+      title.innerText = fallbackTitle || 'Загрузка…';
+      sourceBadge.innerText = sourceId.toUpperCase();
+      statusBadge.innerText = '…';
+      genresDiv.innerHTML = '';
+      desc.innerText = 'Загрузка описания и списка глав…';
+      countSpan.innerText = '0';
+      listDiv.innerHTML = '<div class="text-center py-8"><span class="loading loading-spinner text-primary"></span></div>';
+
+      modal.showModal();
+
+      try {
+        const resp = await fetch(`/api/manga/details/${encodeURIComponent(sourceId)}/${encodeURIComponent(mangaId)}`);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
-        loading.style.display = 'none';
-        submitBtn.disabled = false;
 
-        const results = data.results || [];
-        if (results.length === 0) {
-          resultsContainer.innerHTML = `
-            <div class="col-span-full hero bg-base-100 rounded-3xl p-8 border border-base-200 text-center">
-              <div class="max-w-md">
-                <i class="fa-solid fa-circle-question text-5xl text-base-content/20 mb-3"></i>
-                <h4 class="font-bold text-lg">Ничего не найдено</h4>
-                <p class="text-xs text-base-content/60 mt-1">Попробуйте другое написание или латиницу (например: Berserk, Solo Leveling).</p>
-              </div>
-            </div>
-          `;
+        title.innerText = data.title || fallbackTitle;
+        if (data.cover_url) cover.src = data.cover_url;
+        sourceBadge.innerText = (data.source || sourceId).toUpperCase();
+        statusBadge.innerText = data.status || 'ongoing';
+        desc.innerText = data.description || 'Описание отсутствует.';
+
+        genresDiv.innerHTML = '';
+        (data.genres || []).forEach(g => {
+          if (g) {
+            const b = document.createElement('span');
+            b.className = 'badge badge-outline badge-xs text-[9px] font-semibold opacity-75';
+            b.innerText = g;
+            genresDiv.appendChild(b);
+          }
+        });
+
+        favBtn.className = data.in_library ? 'btn btn-xs sm:btn-sm btn-secondary font-bold gap-1.5 rounded-xl shadow' : 'btn btn-xs sm:btn-sm btn-outline btn-secondary font-bold gap-1.5 rounded-xl shadow';
+        favBtn.innerHTML = data.in_library ? '<i class="fa-solid fa-bookmark"></i> <span>На полке</span>' : '<i class="fa-regular fa-bookmark"></i> <span>На полку</span>';
+        favBtn.onclick = async () => {
+          await toggleFavorite(sourceId, mangaId, data.title || fallbackTitle, data.cover_url || fallbackCover);
+          openMangaDetails(sourceId, mangaId, data.title || fallbackTitle, data.cover_url || fallbackCover);
+        };
+
+        const chapters = data.chapters || [];
+        countSpan.innerText = String(chapters.length);
+        listDiv.innerHTML = '';
+
+        if (chapters.length === 0) {
+          listDiv.innerHTML = '<div class="text-center py-8 text-xs opacity-60">Главы не найдены или пока недоступны.</div>';
           return;
         }
 
-        results.forEach(m => {
-          const card = document.createElement('div');
-          card.className = 'card bg-base-100 border border-base-200 shadow-sm hover:shadow-md transition-all rounded-2xl overflow-hidden flex flex-row p-3 gap-3.5';
-          
-          const coverImg = m.cover_url
-            ? `<img src="${m.cover_url}" alt="${m.title}" class="w-20 h-28 object-cover rounded-xl shadow-sm shrink-0" onerror="this.src='/static/pwa-192.png'" />`
-            : `<div class="w-20 h-28 bg-base-200 rounded-xl flex items-center justify-center text-2xl text-base-content/20 shrink-0"><i class="fa-solid fa-book"></i></div>`;
-
-          const favBtnClass = m.in_library ? 'btn-secondary' : 'btn-outline btn-secondary';
-          const favBtnText = m.in_library ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке' : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
-
-          card.innerHTML = `
-            ${coverImg}
-            <div class="flex-1 flex flex-col justify-between min-w-0">
-              <div>
-                <div class="flex items-center gap-1.5 mb-1">
-                  <span class="badge badge-xs badge-neutral font-extrabold uppercase text-[9px]">${m.source}</span>
-                  ${m.year ? `<span class="text-[10px] opacity-50">${m.year}</span>` : ''}
-                </div>
-                <h4 class="font-black text-sm text-base-content line-clamp-1" title="${m.title}">${m.title}</h4>
-                <p class="text-[11px] text-base-content/60 line-clamp-2 mt-0.5 leading-snug">${m.description || ''}</p>
-              </div>
-              <div class="flex items-center gap-2 mt-2">
-                <button onclick="toggleFavorite('${m.source_id}', '${m.id}', '${m.title.replace(/'/g, "\'")}', '${m.cover_url}', this)" class="btn btn-xs ${favBtnClass} font-bold rounded-lg flex-1">
-                  ${favBtnText}
-                </button>
-                <a href="${m.url}" target="_blank" class="btn btn-xs btn-ghost btn-circle" title="Открыть источник"><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>
-              </div>
+        chapters.forEach(ch => {
+          const row = document.createElement('div');
+          row.className = 'flex items-center justify-between p-2 sm:p-2.5 hover:bg-base-200/70 rounded-xl transition-colors cursor-pointer group active:bg-base-200';
+          row.innerHTML = `
+            <div class="flex items-center gap-2 min-w-0 pr-2">
+              <i class="fa-solid fa-book-open text-xs text-primary/70 group-hover:text-primary shrink-0"></i>
+              <span class="font-extrabold text-xs sm:text-sm truncate">${ch.title}</span>
+              ${ch.lang ? `<span class="badge badge-ghost badge-xs text-[9px] font-mono shrink-0">${ch.lang}</span>` : ''}
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              ${ch.date ? `<span class="text-[10px] text-base-content/40 font-mono hidden sm:inline">${ch.date}</span>` : ''}
+              <button class="btn btn-xs btn-primary rounded-lg font-bold">
+                Читать <i class="fa-solid fa-chevron-right text-[9px]"></i>
+              </button>
             </div>
           `;
-          resultsContainer.appendChild(card);
+          row.onclick = () => {
+            if (sourceId === 'mangakawaii') {
+              window.location.href = `/reader/${encodeURIComponent(mangaId)}/${encodeURIComponent(ch.number || ch.id)}`;
+            } else {
+              alert(`Глава «${ch.title}» (${ch.lang || sourceId}) выбрана.`);
+            }
+          };
+          listDiv.appendChild(row);
         });
 
       } catch (err) {
-        loading.style.display = 'none';
-        submitBtn.disabled = false;
-        alert('Ошибка глобального поиска: ' + err.message);
+        desc.innerText = 'Не удалось загрузить данные манги: ' + err.message;
+        listDiv.innerHTML = '<div class="text-center py-8 text-xs text-error font-bold">Ошибка загрузки глав.</div>';
       }
     }
 
@@ -668,25 +879,26 @@
       const grid = document.getElementById('keiyoushiGrid');
       const lang = document.getElementById('keiyoushiLangFilter').value;
 
-      loading.style.display = 'block';
-      grid.innerHTML = '';
+      if (loading) loading.style.display = 'block';
+      if (grid) grid.innerHTML = '';
 
       try {
         const resp = await fetch(`/api/keiyoushi/extensions?lang=${encodeURIComponent(lang)}`);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
-        loading.style.display = 'none';
+        if (loading) loading.style.display = 'none';
 
         allKeiyoushiExtensions = data.extensions || [];
         renderKeiyoushiExtensions(allKeiyoushiExtensions);
       } catch (e) {
-        loading.style.display = 'none';
-        grid.innerHTML = `<div class="col-span-full alert alert-error text-xs font-bold">Не удалось загрузить Keiyoushi: ${e.message}</div>`;
+        if (loading) loading.style.display = 'none';
+        if (grid) grid.innerHTML = `<div class="col-span-full alert alert-error text-xs font-bold">Не удалось загрузить Keiyoushi: ${e.message}</div>`;
       }
     }
 
     function renderKeiyoushiExtensions(list) {
       const grid = document.getElementById('keiyoushiGrid');
+      if (!grid) return;
       grid.innerHTML = '';
 
       list.forEach(ext => {
@@ -712,7 +924,7 @@
           </div>
           <div class="flex items-center gap-2 shrink-0">
             ${ext.apk_url ? `<a href="${ext.apk_url}" target="_blank" class="btn btn-ghost btn-xs btn-circle" title="Скачать APK"><i class="fa-solid fa-download text-xs text-base-content/60"></i></a>` : ''}
-            <input type="checkbox" onchange="toggleExtensionSource('${ext.slug}', '${ext.name.replace(/'/g, "\'")}', this.checked)" class="toggle toggle-info toggle-sm" ${isChecked} title="Включить источник в поиск" />
+            <input type="checkbox" onchange="toggleExtensionSource('${ext.slug}', '${ext.name.replace(/'/g, "\\'")}', this.checked)" class="toggle toggle-info toggle-sm" ${isChecked} title="Включить источник в поиск" />
           </div>
         `;
         grid.appendChild(card);
@@ -749,6 +961,7 @@
         if (b && d.library) b.innerText = String(d.library.length);
       }).catch(() => {});
     });
+
 </script>
 </body>
 </html>
