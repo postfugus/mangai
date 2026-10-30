@@ -611,11 +611,11 @@ def detect_chapter_language(manga_name: str, filename: str):
         "label": label,
         "probability": prob,
         "available_voices": [
-            {"lang": "ru", "name": "Русский (Нейроголос)"},
-            {"lang": "fr", "name": "Французский (Gemini / Deepgram)"},
-            {"lang": "de", "name": "Немецкий (Deutsch)"},
-            {"lang": "it", "name": "Итальянский (Italiano)"},
-            {"lang": "en", "name": "Английский (English)"}
+            {"lang": "ru", "name": "Русский (Gemini Male)"},
+            {"lang": "fr", "name": "Французский (Gemini Male)"},
+            {"lang": "de", "name": "Немецкий (Gemini Male)"},
+            {"lang": "it", "name": "Итальянский (Gemini Male)"},
+            {"lang": "en", "name": "Английский (Gemini Male)"}
         ],
         "sample_fragment": orig_samples[0] if orig_samples else ""
     }
@@ -668,12 +668,25 @@ def bg_chapter_voiceover(task_id: str, manga_name: str, filename: str, fingerpri
             except Exception:
                 pass
 
+        def load_tts_chunk(index, digest):
+            return get_cached_chapter_voiceover_tts_chunk(
+                manga_name, filename, fingerprint, f"gemini-male-{lang}", index, digest)
+
+        def save_tts_chunk(index, digest, chunk_audio):
+            save_cached_chapter_voiceover_tts_chunk(
+                manga_name, filename, fingerprint, f"gemini-male-{lang}", index, digest,
+                chunk_audio, "audio/wav")
+
         def update_tts_progress(done, total):
             prog = 15 + int(75 * done / max(1, total))
-            task.update(progress=prog, message=f"Озвучивание реплик ({lang.upper()}): {done}/{total}…")
+            task.update(progress=prog, message=f"Gemini мужская озвучка ({lang.upper()}): {done}/{total}…")
 
-        audio_data, segments, duration = synthesize_chapter_multilingual(
-            items, lang=lang, api_key=os.getenv("DEEPGRAM_API_KEY", ""), on_progress=update_tts_progress)
+        audio_data, segments, duration, voice_label, model_label = synthesize_chapter_multilingual(
+            items, lang=lang, api_key=os.getenv("DEEPGRAM_API_KEY", ""),
+            on_progress=update_tts_progress,
+            load_chunk=load_tts_chunk,
+            save_chunk=save_tts_chunk
+        )
 
         task.update(progress=95, message="Сохранение аудиодорожки и таймингов баблов…")
         
@@ -696,8 +709,6 @@ def bg_chapter_voiceover(task_id: str, manga_name: str, filename: str, fingerpri
         public_bubbles = [{key: item[key] for key in ("id", "page_idx", "box", "original", "natural", "emotion", "pairwise_order") if key in item}
                           for item in items]
         
-        voice_label = f"{lang.upper()} Neural Voice"
-        model_label = f"multilingual-tts-{lang}"
         save_cached_chapter_voiceover(manga_name, filename, fingerprint, audio_data, media_type,
                                       segments, public_bubbles, duration,
                                       voice_label, model_label, lang=lang)

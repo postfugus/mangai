@@ -21,7 +21,8 @@ JEV_URL = "https://api.typesafe.ai/v1/systemone"
 DEEPGRAM_TTS_URL = "https://api.deepgram.com/v1/speak"
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-hector-fr")
 GEMINI_TTS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
-GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
+GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
+GEMINI_MALE_VOICE = os.getenv("GEMINI_MALE_VOICE", "Puck")
 GEMINI_FRENCH_MALE_VOICE = os.getenv("GEMINI_FRENCH_MALE_VOICE", "fr-fr-podcaster-2")
 GEMINI_CHUNK_MAX_WORDS = 2050  # ~14 minutes at 145 words/min, below the reported ~16 min ceiling.
 GEMINI_RETRIES = 3
@@ -306,34 +307,64 @@ def _wav_from_gemini_result(result: Dict) -> bytes:
     return _combine_wav_chunks([base64.b64decode(value) for value in encoded], pause_ms=90)
 
 
+def get_voice_for_lang(lang: str) -> Tuple[str, str]:
+    """Returns (voice_name, prompt_language_name) for Gemini male voiceover."""
+    l = (lang or "ru").lower()
+    if l.startswith("fr"):
+        return GEMINI_FRENCH_MALE_VOICE, "French"
+    elif l.startswith("ru"):
+        return GEMINI_MALE_VOICE, "Russian"
+    elif l.startswith("de"):
+        return GEMINI_MALE_VOICE, "German"
+    elif l.startswith("it"):
+        return GEMINI_MALE_VOICE, "Italian"
+    elif l.startswith("en"):
+        return GEMINI_MALE_VOICE, "English"
+    return GEMINI_MALE_VOICE, "Russian"
+
+
+def prepare_item_speech(item: Dict, lang: str = "ru") -> str:
+    """Extract and sanitize speech text for the specified language."""
+    l = (lang or "ru").lower()
+    if l.startswith("ru"):
+        text = (item.get("natural") or item.get("translated") or item.get("original") or "").strip()
+    else:
+        text = (item.get("original") or item.get("natural") or item.get("translated") or "").strip()
+    return prepare_french_speech(text)
+
+
 def synthesize_chapter_gemini(
     items: List[Dict], api_key: str, model: str = GEMINI_TTS_MODEL,
-    voice: str = GEMINI_FRENCH_MALE_VOICE,
+    voice: Optional[str] = None,
+    lang: str = "fr",
     load_chunk: Optional[Callable[[int, str], Optional[bytes]]] = None,
     save_chunk: Optional[Callable[[int, str, bytes], None]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[bytes, str]:
-    """Generate offline audiobook audio exclusively with Gemini, caching each bounded request."""
+    """Generate offline audiobook audio with Gemini male voice across languages, caching each bounded request."""
     if not api_key:
         raise RuntimeError("Не задан GEMINI_API_KEY для Gemini TTS.")
+    default_voice, lang_name = get_voice_for_lang(lang)
+    target_voice = voice or default_voice
     requests_for_chapter = pack_gemini_chapter_chunks(items)
     outputs = []
     for index, batch in enumerate(requests_for_chapter):
-        text = "\n".join(prepare_french_speech(item.get("original", "")) for item in batch)
-        digest = hashlib.sha256(f"{model}\0{voice}\0{text}".encode("utf-8")).hexdigest()
+        text = "\n".join(prepare_item_speech(item, lang=lang) for item in batch)
+        digest = hashlib.sha256(f"{model}\0{target_voice}\0{lang}\0{text}".encode("utf-8")).hexdigest()
         cached = load_chunk(index, digest) if load_chunk else None
         if cached:
             audio = cached
         else:
+            style_instruction = f"Natural audiobook narration in {lang_name}; keep a steady adult male voice, finish every word, and let the final syllable decay naturally."
             content = [{
-                "type": "text", "text": prepare_french_speech(item.get("original", "")),
-                "annotations": [{"type": "speech_metadata", "style": "Natural audiobook narration in French; keep a steady adult male voice, finish every word, and let the final syllable decay naturally."}],
-            } for item in batch if prepare_french_speech(item.get("original", ""))]
+                "type": "text", "text": prepare_item_speech(item, lang=lang),
+                "annotations": [{"type": "speech_metadata", "style": style_instruction}],
+            } for item in batch if prepare_item_speech(item, lang=lang)]
             body = {
                 "model": model,
                 "input": [{"type": "user_input", "content": content}],
                 "response_format": {"type": "audio", "mime_type": "audio/wav"},
-                "generation_config": {"speech_config": [{"voice": voice}]},
+                "generation_config": {"speech_config": [{"voice": target_voice}]},
             }
             response = None
             for attempt in range(GEMINI_RETRIES):
@@ -710,18 +741,40 @@ def mp3_to_wav_bytes(mp3_bytes: bytes) -> bytes:
     return wav_io.getvalue()
 
 
-def synthesize_bubble_multilingual(text: str, lang: str = 'ru', api_key: str = '') -> Tuple[bytes, str]:
+def synthesize_bubble_multilingual(text: str, lang: str = 'ru', api_key: str = '', gemini_api_key: str = '') -> Tuple[bytes, str]:
     """
-    Instant single bubble voiceover.
+    Instant single bubble voiceover with Gemini male voice as primary, falling back to Deepgram/neural TTS.
     Supports 'ru', 'de', 'it', 'fr', 'en'.
-    For French, uses Deepgram aura-2-hector-fr if key available.
-    For Russian, German, Italian (and fallback), uses Google neural TTS (gTTS) converted to WAV.
     """
     clean = text.strip()
     if not clean:
         raise ValueError("Empty text")
 
     lang = (lang or 'ru').lower()
+    g_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+
+    # 1. Try Gemini TTS with male voice
+    if g_key:
+        voice, lang_name = get_voice_for_lang(lang)
+        body = {
+            "model": GEMINI_TTS_MODEL,
+            "input": [{"type": "user_input", "content": [{
+                "type": "text", "text": clean,
+                "annotations": [{"type": "speech_metadata", "style": f"Natural narration in {lang_name}; steady adult male voice."}],
+            }]}],
+            "response_format": {"type": "audio", "mime_type": "audio/wav"},
+            "generation_config": {"speech_config": [{"voice": voice}]},
+        }
+        try:
+            res = requests.post(
+                GEMINI_TTS_URL, headers={"x-goog-api-key": g_key}, json=body, timeout=(5, 30))
+            if res.ok:
+                audio = _wav_from_gemini_result(res.json())
+                return audio, "audio/wav"
+        except Exception:
+            pass
+
+    # 2. Try French Deepgram fallback if key provided
     if lang == 'fr' and api_key:
         try:
             res = requests.post(
@@ -733,6 +786,7 @@ def synthesize_bubble_multilingual(text: str, lang: str = 'ru', api_key: str = '
         except Exception:
             pass
 
+    # 3. Neural gTTS fallback
     from gtts import gTTS
     import io
     gtts_lang = 'ru'
@@ -761,28 +815,49 @@ def synthesize_chapter_multilingual(
     items: List[Dict],
     lang: str = 'ru',
     api_key: str = '',
-    on_progress: Optional[Callable[[int, int], None]] = None
-) -> Tuple[bytes, Dict[str, Dict[str, float]], float]:
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    load_chunk: Optional[Callable[[int, str], Optional[bytes]]] = None,
+    save_chunk: Optional[Callable[[int, str, bytes], None]] = None,
+) -> Tuple[bytes, Dict[str, Dict[str, float]], float, str, str]:
     """
     Synthesizes a full chapter with speech for all speech bubbles in the requested language.
-    Produces a single continuous WAV audio stream and exact timing segments for each bubble.
+    Primary engine: Gemini TTS adult male voice with chunk-level caching.
+    Fallback: individual bubble synthesis + concatenation if Gemini API quota/network is exhausted.
+    Returns: (audio_bytes, segments_dict, duration, voice_label, model_label)
     """
     lang = (lang or 'ru').lower()
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    target_voice, lang_name = get_voice_for_lang(lang)
+
+    # Attempt unified Gemini chapter synthesis first
+    if gemini_key:
+        try:
+            audio_wav, _ = synthesize_chapter_gemini(
+                items, gemini_key, model=GEMINI_TTS_MODEL,
+                voice=target_voice, lang=lang,
+                load_chunk=load_chunk, save_chunk=save_chunk,
+                on_progress=on_progress
+            )
+            # Perform word/acoustic boundary alignment
+            segments, duration = transcribe_and_align(audio_wav, items)
+            voice_label = target_voice
+            model_label = GEMINI_TTS_MODEL
+            return audio_wav, segments, duration, voice_label, model_label
+        except Exception as gemini_err:
+            print(f"[!] Gemini chapter TTS unavailable ({gemini_err}), using robust fallback synthesis...")
+
+    # Fallback bubble-by-bubble synthesis (guarantees completion regardless of quota limits)
     audio_blocks = []
     durations = []
     pause_ms = 220
     
     total = len(items)
     for idx, item in enumerate(items):
-        if lang in {'ru', 'rus'}:
-            text = (item.get('natural') or item.get('translated') or item.get('original') or '').strip()
-        else:
-            text = (item.get('original') or item.get('natural') or item.get('translated') or '').strip()
-            
+        text = prepare_item_speech(item, lang=lang)
         if not text:
             text = '...'
 
-        wav_bytes, _ = synthesize_bubble_multilingual(text, lang=lang, api_key=api_key)
+        wav_bytes, _ = synthesize_bubble_multilingual(text, lang=lang, api_key=api_key, gemini_api_key=gemini_key)
         audio_blocks.append(wav_bytes)
         with wave.open(io.BytesIO(wav_bytes), 'rb') as w:
             dur = w.getnframes() / float(w.getframerate())
@@ -803,4 +878,6 @@ def synthesize_chapter_multilingual(
         current_time += dur + pause_sec
 
     total_duration = round(current_time - pause_sec if current_time > pause_sec else current_time, 3)
-    return combined_wav, segments, total_duration
+    voice_label = f"Gemini Male / {lang.upper()} Voice"
+    model_label = f"gemini-male-tts-{lang}"
+    return combined_wav, segments, total_duration, voice_label, model_label
