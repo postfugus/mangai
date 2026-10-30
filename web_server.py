@@ -676,12 +676,29 @@ def bg_chapter_voiceover(task_id: str, manga_name: str, filename: str, fingerpri
             items, lang=lang, api_key=os.getenv("DEEPGRAM_API_KEY", ""), on_progress=update_tts_progress)
 
         task.update(progress=95, message="Сохранение аудиодорожки и таймингов баблов…")
+        
+        # Сжимаем дорожку в MP3 через lameenc, чтобы размер был в 4 раза меньше (браузеры не падают по памяти и сети)
+        media_type = "audio/wav"
+        try:
+            import lameenc, wave, io
+            w = wave.open(io.BytesIO(audio_data), 'rb')
+            pcm = w.readframes(w.getnframes())
+            enc = lameenc.Encoder()
+            enc.set_bit_rate(96)
+            enc.set_in_sample_rate(w.getframerate())
+            enc.set_channels(w.getnchannels())
+            enc.set_quality(3)
+            audio_data = enc.encode(pcm) + enc.flush()
+            media_type = "audio/mpeg"
+        except Exception as enc_err:
+            print("[!] MP3 compression skipped:", enc_err)
+
         public_bubbles = [{key: item[key] for key in ("id", "page_idx", "box", "original", "natural", "emotion", "pairwise_order") if key in item}
                           for item in items]
         
         voice_label = f"{lang.upper()} Neural Voice"
         model_label = f"multilingual-tts-{lang}"
-        save_cached_chapter_voiceover(manga_name, filename, fingerprint, audio_data, "audio/wav",
+        save_cached_chapter_voiceover(manga_name, filename, fingerprint, audio_data, media_type,
                                       segments, public_bubbles, duration,
                                       voice_label, model_label, lang=lang)
 
