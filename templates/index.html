@@ -79,9 +79,30 @@
     </div>
   </div>
 
-  <!-- Main Navigation Tabs (Mihon-style) -->
-  <div class="max-w-5xl mx-auto w-full px-4 pt-4">
-    <div class="tabs tabs-boxed bg-base-100 p-1 rounded-2xl border border-base-200 shadow-sm flex flex-wrap gap-1">
+  <!-- Main Unified Search & Navigation Header -->
+  <div class="max-w-5xl mx-auto w-full px-4 pt-6">
+    <!-- Global Unified Smart Search Bar -->
+    <form onsubmit="handleUnifiedSearch(event)" class="form-control w-full mb-4">
+      <div class="join w-full shadow-md rounded-2xl overflow-hidden border border-base-200">
+        <div class="relative flex-1">
+          <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-base-content/40">
+            <i class="fa-solid fa-magnifying-glass"></i>
+          </span>
+          <input type="search" id="searchInput" oninput="onSearchInputChange(this.value)" placeholder="Поиск манги (например: Берсерк, Kaze, Solo Leveling...)" class="input input-bordered w-full pl-11 join-item bg-base-100 focus:input-primary text-base" />
+        </div>
+        <button type="submit" id="mainSearchSubmitBtn" class="btn btn-primary join-item px-6 font-extrabold gap-2">
+          <i class="fa-solid fa-compass"></i>
+          <span>Искать везде</span>
+        </button>
+      </div>
+      <div id="smartSearchHint" class="text-xs text-base-content/60 mt-1.5 px-2 flex items-center justify-between">
+        <span><i class="fa-solid fa-info-circle text-primary mr-1"></i> Ищет локально по скачанным главам, а при нажатии Enter или «Искать везде» — опрашивает Remanga, MangaDex и MangaKawaii.</span>
+        <span id="activeSourcesMini" class="hidden sm:inline font-mono opacity-75">Remanga · MangaDex · MangaKawaii</span>
+      </div>
+    </form>
+
+    <!-- Navigation Tabs (Mihon-style) -->
+    <div class="tabs tabs-boxed bg-base-100 p-1 rounded-2xl border border-base-200 shadow-sm flex flex-wrap gap-1 mb-6">
       <button id="tabBtnDownloaded" onclick="switchMainTab('downloaded')" class="tab tab-active flex-1 py-3 font-extrabold gap-2">
         <i class="fa-solid fa-folder-open text-primary"></i>
         <span>Загрузки</span>
@@ -93,38 +114,20 @@
       </button>
       <button id="tabBtnSearch" onclick="switchMainTab('search')" class="tab flex-1 py-3 font-extrabold gap-2">
         <i class="fa-solid fa-compass text-accent"></i>
-        <span>Поиск по сайтам</span>
+        <span>Результаты онлайн-поиска</span>
+        <span id="searchResultsCountBadge" class="badge badge-sm badge-accent font-bold ml-1" style="display:none">0</span>
       </button>
       <button id="tabBtnKeiyoushi" onclick="switchMainTab('keiyoushi')" class="tab flex-1 py-3 font-extrabold gap-2">
         <i class="fa-solid fa-puzzle-piece text-info"></i>
-        <span>Расширения (Keiyoushi)</span>
+        <span>Каталог расширений (Keiyoushi)</span>
       </button>
     </div>
   </div>
 
   <!-- Main Container -->
-  <div class="max-w-5xl mx-auto w-full px-4 pt-4 pb-12">
+  <div class="max-w-5xl mx-auto w-full px-4 pb-12">
     <!-- TAB 1: DOWNLOADED CHAPTERS -->
     <section id="tabContentDownloaded">
-      <!-- Search Bar for Downloaded -->
-      <div class="form-control w-full mb-6">
-        <div class="relative">
-          <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-base-content/40">
-            <i class="fa-solid fa-magnifying-glass"></i>
-          </span>
-          <input type="search" id="searchInput" oninput="filterChapters()" placeholder="Поиск по скачанным главам (например: Kaze, Ch. 01)" class="input input-bordered w-full pl-11 bg-base-100 shadow-sm focus:input-primary rounded-2xl" />
-        </div>
-      </div>
-
-    <!-- Search Bar -->
-    <div class="form-control w-full mb-6">
-      <div class="relative">
-        <span class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none text-base-content/40">
-          <i class="fa-solid fa-magnifying-glass"></i>
-        </span>
-        <input type="search" id="searchInput" oninput="filterChapters()" placeholder="Поиск манги или главы (например: Kaze, Ch. 01)" class="input input-bordered w-full pl-11 bg-base-100 shadow-sm focus:input-primary rounded-2xl" />
-      </div>
-    </div>
 
     <!-- Manga Content List -->
     {% if not mangas %}
@@ -477,6 +480,31 @@
     // ==================== MIHON TABS & MULTI-SOURCE SEARCH JS ====================
     let currentMainTab = 'downloaded';
     let allKeiyoushiExtensions = [];
+    let localFilterTimeout = null;
+
+    function onSearchInputChange(val) {
+      filterChapters();
+      // If user typed something and we have 0 local results, gently suggest or auto-trigger online search
+      clearTimeout(localFilterTimeout);
+      const q = (val || '').trim();
+      const visibleChapters = document.querySelectorAll('.chapter-item:not([style*="display: none"])').length;
+      const hint = document.getElementById('smartSearchHint');
+      if (q && visibleChapters === 0) {
+        if (hint) hint.innerHTML = `<span class="text-accent font-bold"><i class="fa-solid fa-arrow-turn-down mr-1"></i> В скачанных главах ничего не найдено. Нажмите Enter или кнопку «Искать везде», чтобы найти «${q}» на Remanga, MangaDex и MangaKawaii!</span>`;
+      } else {
+        if (hint) hint.innerHTML = `<span><i class="fa-solid fa-info-circle text-primary mr-1"></i> Ищет локально по скачанным главам, а при нажатии Enter или «Искать везде» — опрашивает Remanga, MangaDex и MangaKawaii.</span><span id="activeSourcesMini" class="hidden sm:inline font-mono opacity-75">Remanga · MangaDex · MangaKawaii</span>`;
+      }
+    }
+
+    function handleUnifiedSearch(e) {
+      if (e) e.preventDefault();
+      const q = document.getElementById('searchInput').value.trim();
+      if (!q) return;
+
+      // Switch to Online Search Results tab immediately and execute search
+      switchMainTab('search');
+      performGlobalSearchWithQuery(q);
+    }
 
     function switchMainTab(tab) {
       currentMainTab = tab;
@@ -493,125 +521,88 @@
       if (tab === 'keiyoushi' && allKeiyoushiExtensions.length === 0) loadKeiyoushiExtensions();
     }
 
-    // --- Library Shelf Functions ---
-    async function loadLibraryShelf() {
-      const loading = document.getElementById('libraryLoading');
-      const empty = document.getElementById('libraryEmpty');
-      const grid = document.getElementById('libraryGrid');
-      const badge = document.getElementById('libraryCountBadge');
+    async function performGlobalSearchWithQuery(q) {
+      const loading = document.getElementById('globalSearchLoading');
+      const resultsContainer = document.getElementById('globalSearchResults');
+      const submitBtn = document.getElementById('mainSearchSubmitBtn');
+      const badge = document.getElementById('searchResultsCountBadge');
 
       loading.style.display = 'block';
-      empty.style.display = 'none';
-      grid.innerHTML = '';
+      resultsContainer.innerHTML = '';
+      if (submitBtn) submitBtn.disabled = true;
 
       try {
-        const resp = await fetch('/api/library');
+        const resp = await fetch(`/api/manga/search?q=${encodeURIComponent(q)}`);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
         loading.style.display = 'none';
+        if (submitBtn) submitBtn.disabled = false;
 
-        const items = data.library || [];
-        if (badge) badge.innerText = String(items.length);
-
-        if (items.length === 0) {
-          empty.style.display = 'block';
-          return;
+        const results = data.results || [];
+        if (badge) {
+          badge.innerText = String(results.length);
+          badge.style.display = 'inline-flex';
         }
 
-        items.forEach(item => {
-          const card = document.createElement('div');
-          card.className = 'card bg-base-100 border border-base-200 shadow hover:shadow-xl transition-all rounded-2xl overflow-hidden group flex flex-col justify-between';
-          
-          const coverImg = item.cover_url
-            ? `<img src="${item.cover_url}" alt="${item.title}" class="w-full h-44 sm:h-52 object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.src='/static/pwa-192.png'" />`
-            : `<div class="w-full h-44 sm:h-52 bg-base-200 flex items-center justify-center text-4xl text-base-content/20"><i class="fa-solid fa-book"></i></div>`;
-
-          card.innerHTML = `
-            <div class="relative overflow-hidden">
-              ${coverImg}
-              <span class="badge badge-sm badge-neutral absolute top-2 left-2 font-bold uppercase text-[9px] shadow-md">${item.source_id}</span>
-              <button onclick="removeFavoriteFromLibrary('${item.source_id}', '${item.manga_id}', '${item.title.replace(/'/g, "\'")}')" class="btn btn-circle btn-xs btn-error absolute top-2 right-2 shadow opacity-90 hover:opacity-100" title="Убрать с полки">
-                <i class="fa-solid fa-bookmark"></i>
-              </button>
-            </div>
-            <div class="p-3 flex-1 flex flex-col justify-between">
-              <h4 class="font-extrabold text-xs sm:text-sm line-clamp-2 title mb-1" title="${item.title}">${item.title}</h4>
-              <div class="mt-2 flex items-center justify-between text-[10px] text-base-content/60">
-                <span>${item.last_chapter ? 'Гл. ' + item.last_chapter : 'Читаю'}</span>
-                <span class="badge badge-ghost badge-xs font-semibold">${item.status}</span>
+        if (results.length === 0) {
+          resultsContainer.innerHTML = `
+            <div class="col-span-full hero bg-base-100 rounded-3xl p-8 border border-base-200 text-center">
+              <div class="max-w-md">
+                <i class="fa-solid fa-circle-question text-5xl text-base-content/20 mb-3"></i>
+                <h4 class="font-bold text-lg">По запросу «${q}» ничего не найдено</h4>
+                <p class="text-xs text-base-content/60 mt-1">Попробуйте другое написание названия (например: Berserk, Solo Leveling, Kaze to Ki no Uta).</p>
               </div>
             </div>
           `;
-          grid.appendChild(card);
+          return;
+        }
+
+        results.forEach(m => {
+          const card = document.createElement('div');
+          card.className = 'card bg-base-100 border border-base-200 shadow-sm hover:shadow-md transition-all rounded-2xl overflow-hidden flex flex-row p-3 gap-3.5';
+          
+          const coverImg = m.cover_url
+            ? `<img src="${m.cover_url}" alt="${m.title}" class="w-20 h-28 object-cover rounded-xl shadow-sm shrink-0" onerror="this.src='/static/pwa-192.png'" />`
+            : `<div class="w-20 h-28 bg-base-200 rounded-xl flex items-center justify-center text-2xl text-base-content/20 shrink-0"><i class="fa-solid fa-book"></i></div>`;
+
+          const favBtnClass = m.in_library ? 'btn-secondary' : 'btn-outline btn-secondary';
+          const favBtnText = m.in_library ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке' : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
+
+          card.innerHTML = `
+            ${coverImg}
+            <div class="flex-1 flex flex-col justify-between min-w-0">
+              <div>
+                <div class="flex items-center gap-1.5 mb-1">
+                  <span class="badge badge-xs badge-neutral font-extrabold uppercase text-[9px]">${m.source}</span>
+                  ${m.year ? `<span class="text-[10px] opacity-50">${m.year}</span>` : ''}
+                </div>
+                <h4 class="font-black text-sm text-base-content line-clamp-1" title="${m.title}">${m.title}</h4>
+                <p class="text-[11px] text-base-content/60 line-clamp-2 mt-0.5 leading-snug">${m.description || ''}</p>
+              </div>
+              <div class="flex items-center gap-2 mt-2">
+                <button onclick="toggleFavorite('${m.source_id}', '${m.id}', '${m.title.replace(/'/g, "\'")}', '${m.cover_url}', this)" class="btn btn-xs ${favBtnClass} font-bold rounded-lg flex-1">
+                  ${favBtnText}
+                </button>
+                <a href="${m.url}" target="_blank" class="btn btn-xs btn-ghost btn-circle" title="Открыть источник"><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>
+              </div>
+            </div>
+          `;
+          resultsContainer.appendChild(card);
         });
 
       } catch (err) {
         loading.style.display = 'none';
-        console.error('Library shelf error:', err);
+        if (submitBtn) submitBtn.disabled = false;
+        alert('Ошибка онлайн-поиска: ' + err.message);
       }
     }
 
-    async function toggleFavorite(sourceId, mangaId, title, coverUrl = '', btnEl = null) {
-      try {
-        const resp = await fetch('/api/library/toggle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_id: sourceId, manga_id: mangaId, title: title, cover_url: coverUrl })
-        });
-        const res = await resp.json();
-        if (btnEl) {
-          btnEl.classList.toggle('btn-secondary', res.favorite);
-          btnEl.classList.toggle('btn-outline', !res.favorite);
-          btnEl.innerHTML = res.favorite
-            ? '<i class="fa-solid fa-bookmark mr-1"></i> На полке'
-            : '<i class="fa-regular fa-bookmark mr-1"></i> На полку';
-        }
-        // Update library counter badge
-        loadLibraryShelf();
-      } catch (e) {
-        alert('Ошибка добавления на полку: ' + e.message);
-      }
-    }
-
-    async function removeFavoriteFromLibrary(sourceId, mangaId, title) {
-      if (!confirm(`Убрать «${title}» с полки?`)) return;
-      await toggleFavorite(sourceId, mangaId, title, '');
-      loadLibraryShelf();
-    }
-
-    // --- Multi-source Global Search ---
-    async function loadActiveSourcesBadges() {
-      const container = document.getElementById('activeSourcesBadges');
-      try {
-        const resp = await fetch('/api/sources/enabled');
-        const data = await resp.json();
-        container.innerHTML = '';
-        (data.sources || []).forEach(s => {
-          if (s.enabled) {
-            const b = document.createElement('span');
-            b.className = 'badge badge-sm badge-accent badge-outline font-semibold gap-1';
-            b.innerHTML = `<i class="fa-solid fa-check text-[9px]"></i> ${s.name}`;
-            container.appendChild(b);
-          }
-        });
-      } catch (e) { console.warn(e); }
-    }
-
-    async function performGlobalSearch(e) {
+    function performGlobalSearch(e) {
       if (e) e.preventDefault();
-      const q = document.getElementById('globalSearchInput').value.trim();
-      if (!q) return;
-
-      const loading = document.getElementById('globalSearchLoading');
-      const resultsContainer = document.getElementById('globalSearchResults');
-      const submitBtn = document.getElementById('globalSearchBtn');
-
-      loading.style.display = 'block';
-      resultsContainer.innerHTML = '';
-      submitBtn.disabled = true;
-
-      try {
-        const resp = await fetch(`/api/manga/search?q=${encodeURIComponent(q)}`);
+      const q = (document.getElementById('globalSearchInput')?.value || document.getElementById('searchInput')?.value || '').trim();
+      if (q) performGlobalSearchWithQuery(q);
+    }
+`);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
         loading.style.display = 'none';
