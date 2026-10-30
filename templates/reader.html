@@ -109,13 +109,30 @@
     .in-bubble-replacement.translation-overflow {
       background: rgba(255, 255, 255, 0.98);
     }
-    /* Мягкая подсветка в режиме аудио: без рамок, только блюровое свечение */
+    /* Мягкая подсветка в режиме аудио: без рамок, только блюровое свечение («дымок»/ореол) */
     .in-bubble-replacement.audio-current {
-      z-index: 32;
-      border: none !important;
-      background: rgba(249, 115, 22, 0.25) !important;
-      box-shadow: 0 0 24px 8px rgba(249, 115, 22, 0.45) !important;
-      border-radius: 12px;
+      z-index: 38 !important;
+      border: 1.5px solid rgba(249, 115, 22, 0.75) !important;
+      background: radial-gradient(circle, rgba(249, 115, 22, 0.42) 0%, rgba(249, 115, 22, 0.18) 70%, transparent 100%) !important;
+      box-shadow: 0 0 28px 10px rgba(249, 115, 22, 0.55), inset 0 0 16px rgba(249, 115, 22, 0.35) !important;
+      border-radius: 14px;
+      animation: audioGlowPulse 1.6s ease-in-out infinite alternate;
+      pointer-events: auto !important;
+    }
+    @keyframes audioGlowPulse {
+      0% {
+        box-shadow: 0 0 18px 6px rgba(249, 115, 22, 0.40), inset 0 0 8px rgba(249, 115, 22, 0.20);
+        background: radial-gradient(circle, rgba(249, 115, 22, 0.35) 0%, rgba(249, 115, 22, 0.12) 70%, transparent 100%);
+      }
+      100% {
+        box-shadow: 0 0 34px 14px rgba(249, 115, 22, 0.65), inset 0 0 20px rgba(249, 115, 22, 0.45);
+        background: radial-gradient(circle, rgba(249, 115, 22, 0.50) 0%, rgba(249, 115, 22, 0.22) 70%, transparent 100%);
+      }
+    }
+    .in-bubble-replacement.audio-current.original-transparent {
+      background: radial-gradient(circle, rgba(249, 115, 22, 0.42) 0%, rgba(249, 115, 22, 0.18) 70%, transparent 100%) !important;
+      border: 1.5px solid rgba(249, 115, 22, 0.75) !important;
+      box-shadow: 0 0 28px 10px rgba(249, 115, 22, 0.55), inset 0 0 16px rgba(249, 115, 22, 0.35) !important;
     }
     .in-bubble-replacement.audio-current .in-bubble-text {
       text-decoration: none;
@@ -589,11 +606,18 @@
       document.getElementById('pageCounter').innerText = `${idx + 1} / ${PAGES_LIST.length}`;
       
       clearBubbles();
-      img.onload = () => {
+      const onImageReady = () => {
         loadCachedReplacements(idx).then(() => {
-          if (audioReadingActive && idx === currentPageIdx) startAudioPage();
+          if (audioReadingActive && idx === currentPageIdx) {
+            showCurrentAudioBubble(false);
+          }
         });
       };
+      if (img.complete && img.naturalWidth > 0 && img.src.includes(encodeURIComponent(PAGES_LIST[idx]) || '')) {
+        onImageReady();
+      } else {
+        img.onload = onImageReady;
+      }
       img.src = getPageImageUrl(PAGES_LIST[idx], idx);
       closeDetailsModal();
       
@@ -772,25 +796,47 @@
     function showCurrentAudioBubble(playAudio = false) {
       if (!audioReadingActive || audioReadingIndex < 0 || audioReadingIndex >= audioReadingItems.length) return;
       const item = audioReadingItems[audioReadingIndex];
-      const bubbles = Array.from(document.querySelectorAll('#replacementsLayer .in-bubble-replacement'));
-      bubbles.forEach(el => {
+      const targetPageIdx = item.page_idx ?? currentPageIdx;
+
+      // Очищаем предыдущую подсветку со всех слоёв
+      document.querySelectorAll('.in-bubble-replacement.audio-current').forEach(el => {
         el.classList.remove('audio-current');
-        el.querySelector('.audio-order-number')?.remove();
-        el.querySelector('.bubble-emotion-mark')?.remove();
       });
-      const bubble = findRenderedBubble(bubbles, item.page_idx ?? currentPageIdx, item.box);
+
+      let targetLayer = document.getElementById('replacementsLayer');
+      let targetImg = document.getElementById('currentImage');
+
+      if (readingMode === 'webtoon') {
+        const webtoonPage = document.querySelector(`.webtoon-page[data-page-index="${targetPageIdx}"]`);
+        if (webtoonPage) {
+          targetLayer = webtoonPage.querySelector('.webtoon-replacements') || targetLayer;
+          targetImg = webtoonPage.querySelector('img') || targetImg;
+        }
+      }
+
+      const bubbles = Array.from(targetLayer.querySelectorAll('.in-bubble-replacement'));
+      let bubble = findRenderedBubble(bubbles, targetPageIdx, item.box);
+
+      // Если бабл ещё не отрендерен на странице (например, страница только что загрузилась или кэш ещё парсится),
+      // гарантированно создаём DOM-элемент бабла и принудительно зажигаем «дымок»/подсветку!
+      if (!bubble && item.box) {
+        renderInBubbleCard(item.box, item, targetLayer, targetImg);
+        const updatedBubbles = Array.from(targetLayer.querySelectorAll('.in-bubble-replacement'));
+        bubble = findRenderedBubble(updatedBubbles, targetPageIdx, item.box);
+      }
+
       document.getElementById('audioLineCounter').textContent = `${audioReadingIndex + 1} / ${audioReadingItems.length}`;
       if (bubble) {
         bubble.classList.add('audio-current');
         bubble.scrollIntoView({ behavior: 'smooth', block: 'center' });
         const mode = document.getElementById('audioAnimationMode').value;
         const wrapper = document.getElementById('pageWrapper');
-        if (mode === 'zoom') {
+        if (mode === 'zoom' && readingMode !== 'webtoon') {
           const x = parseFloat(item.box.x) + parseFloat(item.box.w) / 2;
           const y = parseFloat(item.box.y) + parseFloat(item.box.h) / 2;
           wrapper.style.transformOrigin = `${x}% ${y}%`;
           wrapper.style.transform = 'scale(1.65)';
-        } else {
+        } else if (wrapper) {
           wrapper.style.transform = '';
         }
       }
@@ -996,12 +1042,34 @@
     function findRenderedBubble(elements, pageIdx, box) {
       if (Number(pageIdx) !== Number(currentPageIdx) || !box) return null;
       let best = null;
+      const bX = Number(box.x);
+      const bY = Number(box.y);
+      const bW = Number(box.w);
+      const bH = Number(box.h);
+      const bCenterX = bX + bW / 2;
+      const bCenterY = bY + bH / 2;
+
       for (const element of elements) {
-        const deltas = ['origX', 'origY', 'origW', 'origH'].map((key, index) =>
-          Math.abs(Number(element.dataset[key]) - Number(box[['x', 'y', 'w', 'h'][index]])));
-        if (deltas.some(delta => !Number.isFinite(delta) || delta > 6.0)) continue;
-        const distance = deltas.reduce((sum, delta) => sum + delta * delta, 0);
-        if (!best || distance < best.distance) best = { element, distance };
+        const eX = Number(element.dataset.origX || parseFloat(element.style.left) || 0);
+        const eY = Number(element.dataset.origY || parseFloat(element.style.top) || 0);
+        const eW = Number(element.dataset.origW || parseFloat(element.style.width) || 0);
+        const eH = Number(element.dataset.origH || parseFloat(element.style.height) || 0);
+        const eCenterX = eX + eW / 2;
+        const eCenterY = eY + eH / 2;
+
+        const deltas = [Math.abs(eX - bX), Math.abs(eY - bY), Math.abs(eW - bW), Math.abs(eH - bH)];
+        const centerDistance = Math.hypot(eCenterX - bCenterX, eCenterY - bCenterY);
+
+        // 1. Прямое совпадение по габаритам (допуск до 10% от размера страницы)
+        if (deltas.every(delta => Number.isFinite(delta) && delta <= 10.0)) {
+          const distance = deltas.reduce((sum, delta) => sum + delta * delta, 0);
+          if (!best || distance < best.distance) best = { element, distance };
+        }
+        // 2. Или совпадение по центру бабла (если бабл динамически расширялся или пересчитывался)
+        else if (centerDistance < 8.0) {
+          const distance = centerDistance * centerDistance;
+          if (!best || distance < best.distance) best = { element, distance };
+        }
       }
       return best?.element || null;
     }
