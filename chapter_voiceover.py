@@ -56,8 +56,11 @@ def chapter_fingerprint(items: List[Dict]) -> str:
 
 def geometry_key(item: Dict) -> Tuple[float, float, float]:
     box = item["box"]
-    # French manga dialogue is normally read left to right; page order is top to bottom.
-    return (int(item["page_idx"]), round(float(box.get("y", 0)) / max(float(box.get("h", 1)), 1) * 0.55), -float(box.get("x", 0)))
+    y = float(box.get("y", 0.0))
+    x = float(box.get("x", 0.0))
+    # Manga reading order: panels and text progress strictly from top to bottom (y),
+    # and within the same horizontal band/panel from right to left (-x).
+    return (int(item["page_idx"]), round(y / 7.5), -x)
 
 
 def order_chapter_items(items: List[Dict], min_confidence: float = 0.55) -> List[Dict]:
@@ -490,6 +493,7 @@ def synthesize_chapter_deepgram(
 def normalize_words(text: str) -> List[str]:
     text = (text or "").casefold().replace("’", "'").replace("œ", "oe").replace("æ", "ae").replace("ё", "е")
     text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
     # Support all alphabets: Cyrillic, Latin, Greek, Kanji, numbers, etc.
     return re.findall(r"[\w]+", text)
 
