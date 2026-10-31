@@ -1079,17 +1079,28 @@
       }
 
       // Находим текущий активный бабл по точному времени аудиодорожки
+      // Ищем с небольшим упреждением начала (-0.08с), чтобы подсветка не запаздывала за голосом
       let matchedIdx = -1;
       for (let i = 0; i < chapterVoiceover.bubbles.length; i++) {
         const b = chapterVoiceover.bubbles[i];
         const seg = segments[b.id];
-        if (seg && time >= seg.start - 0.05 && time <= seg.end + 0.15) {
+        if (seg && time >= seg.start - 0.08 && time < seg.end) {
           matchedIdx = i;
           break;
         }
       }
 
-      // Если звук попадает в интервал между репликами, сохраняем текущий или плавно продвигаемся вперед
+      // Если аудио находится в паузе между репликами, сохраняем текущую реплику,
+      // пока не начнется следующая (чтобы облачко не мерцало и не исчезало)
+      if (matchedIdx < 0 && audioReadingIndex >= 0 && audioReadingIndex < chapterVoiceover.bubbles.length) {
+        const curTiming = segments[chapterVoiceover.bubbles[audioReadingIndex]?.id];
+        const nextTiming = segments[chapterVoiceover.bubbles[audioReadingIndex + 1]?.id];
+        if (curTiming && time >= curTiming.start - 0.08 && (!nextTiming || time < nextTiming.start - 0.08)) {
+          matchedIdx = audioReadingIndex;
+        }
+      }
+
+      // Если всё еще не нашли (например, при ручной перемотке вперед), находим ближайший бабл
       if (matchedIdx < 0) {
         for (let i = 0; i < chapterVoiceover.bubbles.length; i++) {
           const seg = segments[chapterVoiceover.bubbles[i].id];
@@ -1097,6 +1108,9 @@
             matchedIdx = Math.max(0, i - 1);
             break;
           }
+        }
+        if (matchedIdx < 0 && chapterVoiceover.bubbles.length > 0) {
+          matchedIdx = chapterVoiceover.bubbles.length - 1;
         }
       }
 

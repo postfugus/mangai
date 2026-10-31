@@ -696,20 +696,33 @@ def align_bubbles_to_words(items: List[Dict], words: Optional[List[Dict]], durat
                            if candidate[0] > start + 0.08), duration)
         start, end = _refine_phrase_boundaries(start, raw_end, next_start, duration, rms, frame_seconds)
         refined.append((start, end))
-    previous_start = 0.0
-    for index, (item, timing) in enumerate(zip(items, raw_times)):
+
+    # Second pass: enforce strict monotonic order and ensure short interjections
+    # (e.g. «ох», «ах», «да», «ого», «хорошо») have sufficient visual/audio duration (at least 0.65s)
+    # so they do not flash in 0.1s and cause the highlight to lag or race ahead.
+    previous_end = 0.0
+    for index, item in enumerate(items):
         start, end = refined[index]
-        start = max(previous_start, start)
-        next_start = next((candidate[0] for candidate in refined[index + 1:]
-                           if candidate[0] > start + 0.04), duration)
-        if end > next_start:
-            # Whisper can place adjacent word times on top of one another. Stop
-            # this bubble at the next acoustically refined onset, never inside a
-            # later bubble merely because that bubble's word match began early.
-            end = max(start + 0.06, next_start - 0.015)
-        end = min(duration, max(start + 0.06, end))
+        # Start cannot be earlier than previous bubble's end
+        start = max(previous_end, start)
+
+        next_onset = duration
+        for next_idx in range(index + 1, len(items)):
+            if refined[next_idx][0] > start + 0.05:
+                next_onset = refined[next_idx][0]
+                break
+
+        # Give short utterances breathing room up to the next bubble onset
+        min_desired = min(next_onset - 0.02, start + 0.65)
+        if end < min_desired:
+            end = max(end, min_desired)
+
+        if end >= next_onset:
+            end = max(start + 0.15, next_onset - 0.015)
+
+        end = min(duration, max(start + 0.15, end))
         result[item["id"]] = {"start": round(start, 3), "end": round(end, 3)}
-        previous_start = start
+        previous_end = end
     return result
 
 
