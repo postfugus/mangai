@@ -539,6 +539,18 @@ def start_chapter_voiceover(manga_name: str, filename: str, background_tasks: Ba
     items = get_all_cached_chapter_bubbles(manga_name, filename)
     if not items:
         raise HTTPException(status_code=409, detail="Сначала распознай и переведи баблы главы.")
+
+    # Guard: if requesting Russian voiceover, ensure the chapter is actually translated to Russian
+    target_lang = (lang or "ru").lower()
+    if target_lang.startswith("ru"):
+        translated_count = sum(1 for item in items if (item.get("natural") or item.get("translated") or "").strip())
+        ratio = translated_count / len(items) if items else 0.0
+        if ratio < 0.5:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Глава переведена на русский язык только на {ratio*100:.0f}% ({translated_count}/{len(items)} баблов). Сначала выполните перевод главы на русский, чтобы озвучка не читала французский текст вперемешку."
+            )
+
     fingerprint = chapter_fingerprint(items)
     cached = get_cached_chapter_voiceover(manga_name, filename, fingerprint, include_audio=False, lang=lang)
     if cached:

@@ -313,17 +313,18 @@ def _wav_from_gemini_result(result: Dict) -> bytes:
 def get_voice_for_lang(lang: str) -> Tuple[str, str]:
     """Returns (voice_name, prompt_language_name) for Gemini male voiceover."""
     l = (lang or "ru").lower()
+    voice = GEMINI_MALE_VOICE or "Puck"
     if l.startswith("fr"):
-        return GEMINI_FRENCH_MALE_VOICE, "French"
+        return voice, "French"
     elif l.startswith("ru"):
-        return GEMINI_MALE_VOICE, "Russian"
+        return voice, "Russian"
     elif l.startswith("de"):
-        return GEMINI_MALE_VOICE, "German"
+        return voice, "German"
     elif l.startswith("it"):
-        return GEMINI_MALE_VOICE, "Italian"
+        return voice, "Italian"
     elif l.startswith("en"):
-        return GEMINI_MALE_VOICE, "English"
-    return GEMINI_MALE_VOICE, "Russian"
+        return voice, "English"
+    return voice, "Russian"
 
 
 def prepare_item_speech(item: Dict, lang: str = "ru") -> str:
@@ -358,7 +359,7 @@ def synthesize_chapter_gemini(
         if cached:
             audio = cached
         else:
-            style_instruction = f"Natural audiobook narration in {lang_name}; keep a steady adult male voice, finish every word, and let the final syllable decay naturally."
+            style_instruction = f"Professional, articulate audiobook narration in {lang_name}. Speak in a calm, clear, confident adult male tone with crisp diction and natural pacing. Do not whisper, gasp, or moan."
             content = [{
                 "type": "text", "text": prepare_item_speech(item, lang=lang),
                 "annotations": [{"type": "speech_metadata", "style": style_instruction}],
