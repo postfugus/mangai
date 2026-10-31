@@ -660,9 +660,23 @@ def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float
         gap_end = index
         left = aligned[gap_start - 1][1] if gap_start else 0.0
         right = aligned[gap_end][0] if gap_end < len(items) else duration
-        right = max(left, right)
         weights = [max(1, len(normalize_words(prepare_item_speech(items[i], lang=lang)))) for i in range(gap_start, gap_end)]
         weight_sum = sum(weights) or 1
+        gap_count = gap_end - gap_start
+
+        # Sanity check: prevent squashing multiple unaligned bubbles into an impossibly small time window
+        # (e.g. false anchor downstream squashing 50+ bubbles into 2 seconds).
+        # A human speaker cannot produce speech faster than ~8 words/sec or ~0.45s per bubble.
+        if gap_end < len(items) and (
+            (right - left < gap_count * 0.45) or
+            (weight_sum > 0 and (right - left) / weight_sum < 0.12)
+        ):
+            # The right anchor at gap_end is an invalid/premature match; discard it and keep searching downstream
+            aligned[gap_end] = None
+            index = gap_start
+            continue
+
+        right = max(left, right)
         offset = 0.0
         for i, weight in zip(range(gap_start, gap_end), weights):
             start = left + (right - left) * offset / weight_sum
