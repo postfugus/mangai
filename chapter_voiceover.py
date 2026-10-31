@@ -488,10 +488,10 @@ def synthesize_chapter_deepgram(
 
 
 def normalize_words(text: str) -> List[str]:
-    text = text.casefold().replace("’", "'").replace("œ", "oe").replace("æ", "ae")
+    text = (text or "").casefold().replace("’", "'").replace("œ", "oe").replace("æ", "ae").replace("ё", "е")
     text = unicodedata.normalize("NFKD", text)
-    text = "".join(char for char in text if not unicodedata.combining(char))
-    return re.findall(r"[a-z]+", text)
+    # Support all alphabets: Cyrillic, Latin, Greek, Kanji, numbers, etc.
+    return re.findall(r"[\w]+", text)
 
 
 def _token_sequence_similarity(target: List[str], sample: List[str]) -> float:
@@ -608,7 +608,8 @@ def _refine_phrase_boundaries(raw_start: float, raw_end: float, next_start: floa
 
 
 def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float,
-                           rms=None, frame_seconds: Optional[float] = None) -> Dict[str, Dict[str, float]]:
+                           rms=None, frame_seconds: Optional[float] = None,
+                           lang: str = "ru") -> Dict[str, Dict[str, float]]:
     """Align bubbles to Whisper words, then refine cuts against the actual waveform."""
     if duration <= 0 or not items:
         raise RuntimeError("Аудиоглава не содержит звука или диалоговых реплик.")
@@ -626,7 +627,7 @@ def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float
     cursor = 0
     aligned = [None] * len(items)
     for item_index, item in enumerate(items):
-        target = normalize_words(item.get("original", ""))
+        target = normalize_words(prepare_item_speech(item, lang=lang))
         if not target:
             continue
         best = None
@@ -656,7 +657,7 @@ def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float
         left = aligned[gap_start - 1][1] if gap_start else 0.0
         right = aligned[gap_end][0] if gap_end < len(items) else duration
         right = max(left, right)
-        weights = [max(1, len(normalize_words(items[i].get("original", "")))) for i in range(gap_start, gap_end)]
+        weights = [max(1, len(normalize_words(prepare_item_speech(items[i], lang=lang)))) for i in range(gap_start, gap_end)]
         weight_sum = sum(weights) or 1
         offset = 0.0
         for i, weight in zip(range(gap_start, gap_end), weights):
@@ -727,7 +728,7 @@ def transcribe_and_align(audio: bytes, items: List[Dict], lang: str = "ru", mode
     else:
         print("[*] faster-whisper is not installed. Using acoustic RMS & proportional alignment.")
 
-    return align_bubbles_to_words(items, words, duration, rms, frame_seconds), duration
+    return align_bubbles_to_words(items, words, duration, rms, frame_seconds, lang=lang), duration
 
 def mp3_to_wav_bytes(mp3_bytes: bytes) -> bytes:
     """Converts MP3 audio bytes to linear PCM WAV bytes using miniaudio."""
