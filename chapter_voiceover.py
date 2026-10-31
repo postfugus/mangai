@@ -120,6 +120,11 @@ def has_pairwise_order_analysis(items: List[Dict]) -> bool:
 
 def prepare_french_speech(text: str) -> str:
     clean = re.sub(r"\s+", " ", (text or "")).strip()
+    # Remove OCR debris and code-like structures e.g. 7718ц9 or +!1!#
+    clean = re.sub(r"[{}\[\]<>#~°^|+=_\\/`]+", " ", clean)
+    clean = re.sub(r"\b(?:\d+[A-Za-zА-Яа-яЁё]+|[A-Za-zА-Яа-яЁё]+\d+)[A-Za-zА-Яа-яЁё\d]*\b", "", clean)
+    clean = re.sub(r"(?:^|\s)[!?\-_+*]+(?:\d+[!?\-_+*]*)+(?:\s|$)", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
     letters = [char for char in clean if char.isalpha()]
     if letters and sum(char.isupper() for char in letters) / len(letters) >= 0.6:
         clean = clean.lower()
@@ -612,17 +617,14 @@ def _refine_phrase_boundaries(raw_start: float, raw_end: float, next_start: floa
     return min(raw_start, phrase_start), max(raw_end, phrase_end)
 
 
-def align_bubbles_to_words(items: List[Dict], words: List[Dict], duration: float,
+def align_bubbles_to_words(items: List[Dict], words: Optional[List[Dict]], duration: float,
                            rms=None, frame_seconds: Optional[float] = None,
                            lang: str = "ru") -> Dict[str, Dict[str, float]]:
     """Align bubbles to Whisper words, then refine cuts against the actual waveform."""
     if duration <= 0 or not items:
         raise RuntimeError("Аудиоглава не содержит звука или диалоговых реплик.")
-
-    # Если Whisper не распознал слова или не установлен, производим прямое
-    # взвешенное выравнивание по огибающей RMS и объёму фраз
-    if not words:
-        words = []
+    if words is None:
+        raise RuntimeError("Whisper не распознал речь в аудиоглаве; тайминги не сохранены.")
 
     transcript = []
     for word in words:

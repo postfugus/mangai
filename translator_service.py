@@ -12,7 +12,7 @@ import pytesseract
 from pathlib import Path
 
 from db_cache import get_cached_translation, save_cached_translation, get_cached_page_bubbles, save_cached_page_bubbles, delete_cached_translations_for_boxes
-from text_quality import is_russian_translation, is_usable_ocr_text
+from text_quality import is_russian_translation, is_usable_ocr_text, clean_ocr_and_code_artifacts
 
 try:
     import ai_edge_litert.interpreter as litert
@@ -197,8 +197,8 @@ class MangaTranslatorService:
         lit = (result.get("literal") or "").strip()
 
         # Clean noise, brackets, extra quotes
-        orig = re.sub(r'^[|_\-—~`\'"“«\s]+|[|_\-—~`\'"”»\s]+$', '', orig).strip()
-        nat = re.sub(r'^[|_\-—~`\'"“«\s]+|[|_\-—~`\'"”»\s]+$', '', nat).strip()
+        orig = clean_ocr_and_code_artifacts(re.sub(r'^[|_\-—~`\'"“«\s]+|[|_\-—~`\'"”»\s]+$', '', orig).strip())
+        nat = clean_ocr_and_code_artifacts(re.sub(r'^[|_\-—~`\'"“«\s]+|[|_\-—~`\'"”»\s]+$', '', nat).strip())
 
         # Check for pure noise (no actual letters)
         has_letters_orig = bool(re.search(r'[a-zA-Zа-яА-Я]', orig))
@@ -416,7 +416,7 @@ The natural field must be Russian. Do not return French or English there. Do not
                 return None
             raw = response.json()["choices"][0]["message"]["content"]
             parsed = json.loads(raw)
-            natural = parsed.get("natural", "")
+            natural = clean_ocr_and_code_artifacts(parsed.get("natural", ""))
             if not isinstance(natural, str):
                 return None
             natural = natural.strip()

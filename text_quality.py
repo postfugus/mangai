@@ -10,6 +10,27 @@ _LETTERS = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿА-Яа-яЁё]")
 _MOJIBAKE = re.compile(r"(?:Ã.|Â.|â€|\ufffd)")
 
 
+def clean_ocr_and_code_artifacts(text: str) -> str:
+    """Strip OCR parsing debris, code markers (e.g. 7718ц9, +!1!#), brackets, and stray noise."""
+    if not text:
+        return ""
+    t = text.strip()
+    # Replace code brackets, markup, and standalone junk symbols with spaces
+    t = re.sub(r"[{}\[\]<>#~°^|+=_\\/`]+", " ", t)
+    # Remove alphanumeric parsing hashes/codes e.g. 7718ц9, 47D2, F7, nr
+    t = re.sub(r"\b(?:\d+[A-Za-zА-Яа-яЁё]+|[A-Za-zА-Яа-яЁё]+\d+)[A-Za-zА-Яа-яЁё\d]*\b", "", t)
+    # Remove punctuation-digit codes e.g. !1! or +!1!#
+    t = re.sub(r"(?:^|\s)[!?\-_+*]+(?:\d+[!?\-_+*]*)+(?:\s|$)", " ", t)
+    # Remove isolated 1-2 Latin letter artifacts inside Cyrillic text
+    t = re.sub(r"(?<=\s)[A-Za-z]{1,2}(?=\s|$)", "", t)
+    t = re.sub(r"^[A-Za-z]{1,2}(?=\s)", "", t)
+    # Strip boundary punctuation/debris
+    t = re.sub(r"^\s*[:;,\.\-–—\s]+", "", t)
+    t = re.sub(r"[:;,\-–—\s]+$", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def is_russian_translation(original: str, translated: str) -> bool:
     """Reject empty, copied-source, non-Russian, or mostly unparsed output."""
     source = (original or "").strip()

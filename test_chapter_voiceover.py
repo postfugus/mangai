@@ -228,17 +228,18 @@ class ChapterVoiceoverTests(unittest.TestCase):
 
     def test_missing_whisper_transcript_fails_instead_of_mapping_whole_chapter(self):
         with self.assertRaisesRegex(RuntimeError, "Whisper не распознал"):
-            align_bubbles_to_words(self.items, [], 30)
+            align_bubbles_to_words(self.items, None, 30)
 
     def test_french_alignment_normalizes_accents_and_apostrophe_tokens(self):
         self.assertEqual(normalize_words("HE n’est pas allé"), ["he", "n", "est", "pas", "alle"])
         self.assertEqual(normalize_words("CŒUR, déjà"), ["coeur", "deja"])
 
     def test_ocr_spelling_variants_still_align_to_whisper_words(self):
-        item = dict(self.items[0], id="p0-short", original="MONSIELIR REUE !")
+        item = {"id": "p0-short", "page_idx": 0, "box": {"x": 10, "y": 5, "w": 20, "h": 6},
+                "original": "MONSIELIR REUE !", "natural": "Monsielir reue !"}
         result = align_bubbles_to_words(
             [item], [{"text": "Monsieur", "start": 0.40, "end": 0.85},
-                     {"text": "Roux", "start": 0.86, "end": 1.20}], 2.0)
+                     {"text": "Roux", "start": 0.86, "end": 1.20}], 2.0, lang="fr")
         self.assertGreaterEqual(result["p0-short"]["start"], 0.25)
         self.assertLessEqual(result["p0-short"]["start"], 0.40)
         self.assertLess(result["p0-short"]["end"], 1.6)
